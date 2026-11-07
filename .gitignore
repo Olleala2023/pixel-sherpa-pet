@@ -1,0 +1,9 @@
+agent-avatars/
+agent-sprites/
+agent-arcade/
+hatch-pet-claude/
+pixel-mascot/
+claude-pet/
+sherpa-state.txt
+__pycache__/
+*.pyc

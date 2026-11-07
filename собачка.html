@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Эмодзи робопса Sherpa — 3 пиксельных стиля</title>
+  <style>
+    :root {
+      --ink: #1e242b;
+      --muted: #5a6570;
+      --paper: #f3efe9;
+      --card: #ffffff;
+      --dark-card: #1f242d;
+      --blue: #2eb4e4;
+      color-scheme: light;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: "Segoe UI", system-ui, sans-serif;
+      line-height: 1.45;
+    }
+
+    main {
+      width: min(940px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0 64px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.6rem;
+      letter-spacing: -0.02em;
+    }
+
+    .lead {
+      margin: 0 0 18px;
+      color: var(--muted);
+      max-width: 68ch;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+
+    button {
+      appearance: none;
+      border: 1px solid #d8cfc7;
+      background: #fff;
+      color: var(--ink);
+      font: inherit;
+      font-weight: 500;
+      border-radius: 999px;
+      padding: 8px 15px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      border-color: var(--blue);
+    }
+
+    button:focus-visible {
+      outline: 2px solid var(--blue);
+      outline-offset: 2px;
+    }
+
+    button[aria-pressed="true"],
+    button.active {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: #fff;
+    }
+
+    .variants-compare {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(275px, 1fr));
+      gap: 14px;
+      margin-bottom: 28px;
+    }
+
+    .variant-box {
+      background: var(--card);
+      border-radius: 18px;
+      padding: 16px;
+      border: 2px solid transparent;
+      box-shadow: 0 8px 22px rgb(40 70 90 / 7%);
+      display: grid;
+      gap: 10px;
+      cursor: pointer;
+    }
+
+    .variant-box.selected {
+      border-color: var(--blue);
+    }
+
+    .variant-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+    }
+
+    .variant-head h2 {
+      margin: 0;
+      font-size: 1.08rem;
+    }
+
+    .badge {
+      font-size: 0.78rem;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #e7f6fc;
+      color: #1378a0;
+      font-weight: 600;
+    }
+
+    .variant-previews {
+      display: flex;
+      align-items: center;
+      justify-content: space-around;
+      gap: 10px;
+      padding: 12px 8px;
+      border-radius: 12px;
+      background: #f8f6f2;
+    }
+
+    .preview-dark {
+      background: var(--dark-card);
+      padding: 8px 12px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #e6edf3;
+      font-size: 0.82rem;
+    }
+
+    .variant-box p {
+      margin: 0;
+      font-size: 0.88rem;
+      color: var(--muted);
+    }
+
+    .strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 22px;
+    }
+
+    .mini {
+      background: var(--card);
+      border-radius: 14px;
+      padding: 10px 12px 8px;
+      box-shadow: 0 6px 18px rgb(40 70 90 / 7%);
+      display: grid;
+      justify-items: center;
+      gap: 4px;
+    }
+
+    .mini.dark {
+      background: var(--dark-card);
+    }
+
+    .mini.dark span {
+      color: #c9d4df;
+    }
+
+    .mini span {
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+      gap: 14px;
+    }
+
+    .card {
+      background: var(--card);
+      border-radius: 18px;
+      padding: 18px 12px 14px;
+      box-shadow: 0 10px 26px rgb(40 70 90 / 8%);
+      display: grid;
+      justify-items: center;
+      gap: 6px;
+    }
+
+    .card.dark {
+      background: var(--dark-card);
+      color: #f0f5fa;
+    }
+
+    .card.dark p {
+      color: #a8b6c4;
+    }
+
+    .card h3 { margin: 4px 0 0; font-size: 1.05rem; }
+    .card p { margin: 0; color: var(--muted); font-size: 0.9rem; text-align: center; }
+
+    .actor {
+      translate: 0 0;
+      rotate: 0deg;
+      scale: 1 1;
+      transform-origin: center bottom;
+    }
+
+    .bob { animation: bob 2s ease-in-out infinite; }
+    .hop { animation: hop 0.9s linear infinite; }
+    .sway { animation: sway 1.35s ease-in-out infinite; }
+
+    canvas {
+      display: block;
+      image-rendering: pixelated;
+    }
+
+    @keyframes bob {
+      0%, 100% { translate: 0 0; scale: 1 1; }
+      50% { translate: 0 -4px; scale: 1.02 0.98; }
+    }
+
+    @keyframes hop {
+      0%, 100% { translate: 0 2px; scale: 1.06 0.92; }
+      35% { translate: 0 -14px; scale: 0.96 1.06; }
+      70% { translate: 0 2px; scale: 1.08 0.88; }
+      84% { translate: 0 -3px; scale: 0.99 1.02; }
+    }
+
+    @keyframes sway {
+      0%, 100% { rotate: -3deg; }
+      50% { rotate: 3deg; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .actor { animation: none; }
+    }
+
+    html[data-paused="true"] .actor { animation-play-state: paused; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Пиксельный робопёс Sherpa — 3 варианта</h1>
+    <p class="lead">Сравнение трёх подходов к пиксельному спрайту: классический чиби с контуром, компактная «клякса» в духе Claude Code и крупная голова-эмодзи для мелкого текста.</p>
+
+    <div class="variants-compare" id="compare"></div>
+
+    <div class="toolbar">
+      <button type="button" data-style="chibi" class="active">1. Чиби с контуром (24×24)</button>
+      <button type="button" data-style="blob">2. В духе Claude Code (19×14)</button>
+      <button type="button" data-style="head">3. Крупная голова-эмодзи (20×18)</button>
+      <button type="button" id="bg-toggle" aria-pressed="false">Тёмный фон</button>
+      <button type="button" id="pause" aria-pressed="false">Пауза</button>
+    </div>
+
+    <div class="strip" id="strip"></div>
+    <div class="grid" id="grid"></div>
+  </main>
+
+  <script>
+    const COLORS = {
+      K: "#1c2836", // Тёмно-синий контур
+      w: "#f6f9fc", // Белый корпус
+      h: "#ffffff", // Чистый белый блик
+      s: "#dce6ef", // Светло-серая тень на теле
+      e: "#607089", // Сине-серые уши и хвост
+      E: "#46556c", // Тёмная часть уха
+      b: "#3298d4", // Фирменный голубой Sherpa (маска глаз, ошейник, шестерёнка)
+      B: "#1d77ad", // Более плотный синий (нос, акценты)
+      o: "#7bd5f5", // Светло-голубое свечение антенны и блик на носу
+      p: "#0f1722", // Чёрный зрачок и улыбка
+      z: "#5bc0eb", // Голубые буквы z и точки
+    };
+
+    const MOODS = [
+      { id: "glad", title: "Рад", text: "Улыбается, виляет хвостом и моргает.", move: "bob" },
+      { id: "hi", title: "Привет", text: "Поднимает и машет передней лапкой.", move: "sway" },
+      { id: "look", title: "Смотри", text: "Показывает лапкой на экран чата.", move: "bob" },
+      { id: "think", title: "Думает", text: "Глаза вверх, антенна мигает.", move: "bob" },
+      { id: "yay", title: "Ура", text: "Радостно прищурился и прыгает.", move: "hop" },
+      { id: "sleep", title: "Спит", text: "Глазки закрыты, летят сонные z.", move: "bob" },
+    ];
+
+    const STYLES = [
+      {
+        id: "chibi",
+        name: "1. Чиби с контуром",
+        size: "24×24 px",
+        desc: "Чёткий тёмный контур не даёт белому телу слиться с фоном. Голова занимает 60% высоты, голубые круги вокруг глаз и шестерёнка на груди.",
+      },
+      {
+        id: "blob",
+        name: "2. Клякса Claude Code",
+        size: "19×14 px",
+        desc: "Тот же минималистичный силуэт на двух коротких лапках, что у рыжего маскота Claude Code, но с ушами, голубыми пятнами и антенной Sherpa.",
+      },
+      {
+        id: "head",
+        name: "3. Голова-эмодзи",
+        size: "20×18 px",
+        desc: "Крупный портрет без лишних мелких лапок — как делают эмодзи для Telegram, чтобы глаза и улыбка читались в строке текста 20×20 px.",
+      },
+    ];
+
+    function makeGrid(w, h) {
+      return Array.from({ length: h }, () => Array(w).fill("."));
+    }
+
+    function pix(g, x, y, c) {
+      if (y >= 0 && x >= 0 && y < g.length && x < g[0].length) g[y][x] = c;
+    }
+
+    function fill(g, x, y, w, h, c) {
+      for (let yy = y; yy < y + h; yy++) {
+        for (let xx = x; xx < x + w; xx++) pix(g, xx, yy, c);
+      }
+    }
+
+    function setRows(g, ox, oy, rows) {
+      for (let y = 0; y < rows.length; y++) {
+        const r = rows[y];
+        for (let x = 0; x < r.length; x++) {
+          if (r[x] !== ".") pix(g, ox + x, oy + y, r[x]);
+        }
+      }
+    }
+
+    // ВАРИАНТ 1: ЧИБИ С КОНТУРОМ (сетка 30x25 с запасом под экран и хвост)
+    function drawChibi(mood, frame) {
+      const g = makeGrid(30, 25);
+      const wag = frame % 2 === 0;
+      const blink = mood !== "sleep" && frame === 3;
+      const waveUp = mood === "hi" && frame % 2 === 0;
+
+      // Корпус и голова с контуром
+      const base = [
+        "........KK........", // 0: верхушка антенны
+        ".......KooK.......", // 1: шарик антенны
+        "........KK........", // 2: стержень
+        ".....KKKKKKKK.....", // 3: макушка
+        "...KKhhhhhhhhKK...", // 4
+        "..KhhwwwwwwwwhhK..", // 5
+        ".KKwwwwwwwwwwwwKK.", // 6
+        "KeeKwwbbbbbbwwKeeK", // 7: уши + голубые маски глаз
+        "KeeKwbpphwbpphKeeK", // 8
+        "KeeKwbpppwbpppKeeK", // 9
+        "KEEewbbbbwbbbbweEK", // 10
+        "KeeewwwwwBBwwwwweK", // 11: голубой носик
+        ".KKwwwwwwwwwwwwKK.", // 12: улыбка
+        "...KKbbbbbbbbKK...", // 13: голубой ошейник
+        "....KwwwwwwwwK....", // 14: грудь
+        "....KwwwbbwwwK....", // 15: шестерёнка верх
+        "....KwwbhhbwwK....", // 16: шестерёнка центр
+        "....KwwwbbwwwK....", // 17: шестерёнка низ
+        "....KssssssssK....", // 18: животик
+        "....KwwKKKKwwK....", // 19: обе ножки всегда на месте
+        "....KbbK..KbbK....", // 20: голубые суставы
+        "....KwwK..KwwK....", // 21: лапки
+        "....KKKK..KKKK....", // 22
+      ];
+      setRows(g, 4, 1, base);
+
+      // Хвост слева — соединён вплотную с левым бедром корпуса (x = 4..8, строки 19..22)
+      if (wag) {
+        setRows(g, 4, 19, [
+          "KK...",
+          "KeeKK",
+          "KeeeK",
+          ".KKKK"
+        ]);
+      } else {
+        setRows(g, 4, 20, [
+          ".KKK.",
+          "KeeeK",
+          ".KKKK"
+        ]);
+      }
+
+      // Верхние лапки (2px шириной: KbbK плечо + KwwK кисть) по бокам туловища
+      if (mood === "yay") {
+        setRows(g, 4, 13, [
+          ".KK..",
+          "KwwK.",
+          "KbbK.",
+          ".KKKK"
+        ]);
+        setRows(g, 17, 13, [
+          "..KK.",
+          ".KwwK",
+          ".KbbK",
+          "KKKK."
+        ]);
+      } else {
+        // Левая верхняя лапка вдоль бока
+        setRows(g, 5, 15, [
+          ".KKK",
+          "KbbK",
+          "KwwK",
+          ".KKK"
+        ]);
+        // Правая верхняя лапка
+        if (mood === "hi") {
+          if (waveUp) {
+            setRows(g, 17, 12, [
+              "..KK.",
+              ".KwwK",
+              "KKbbK",
+              "KwwwK",
+              "KKKK."
+            ]);
+          } else {
+            setRows(g, 17, 14, [
+              ".KKK.",
+              "KbbwK",
+              "KwwwK",
+              "KKKK."
+            ]);
+          }
+        } else if (mood === "look") {
+          setRows(g, 17, 15, [
+            "KKKKKK",
+            "Kbbwwb",
+            "KKKKKK"
+          ]);
+        } else if (mood === "think") {
+          setRows(g, 17, 13, [
+            ".KK.",
+            "KwwK",
+            "KbbK",
+            "KKK."
+          ]);
+        } else {
+          setRows(g, 17, 15, [
+            "KKK.",
+            "KbbK",
+            "KwwK",
+            "KKK."
+          ]);
+        }
+      }
+
+      // Точки вокруг глаз с разделением переносицы
+      fill(g, 10, 8, 4, 4, "b");
+      fill(g, 16, 8, 4, 4, "b");
+      fill(g, 14, 8, 2, 3, "w"); // белая переносица между голубыми пятнами
+
+      // Носик
+      fill(g, 14, 11, 2, 2, "B");
+      pix(g, 14, 11, "o");
+
+      // Глаза по настроению
+      if (mood === "sleep" || blink) {
+        fill(g, 10, 8, 4, 4, "b");
+        fill(g, 16, 8, 4, 4, "b");
+        fill(g, 11, 10, 2, 1, "p");
+        fill(g, 17, 10, 2, 1, "p");
+      } else if (mood === "yay") {
+        pix(g, 11, 9, "p"); pix(g, 12, 9, "p");
+        pix(g, 10, 10, "p"); pix(g, 13, 10, "p");
+        pix(g, 17, 9, "p"); pix(g, 18, 9, "p");
+        pix(g, 16, 10, "p"); pix(g, 19, 10, "p");
+      } else if (mood === "think") {
+        fill(g, 11, 8, 2, 2, "p");
+        fill(g, 17, 8, 2, 2, "p");
+        pix(g, 11, 8, "h");
+        pix(g, 17, 8, "h");
+      } else {
+        fill(g, 11, 9, 2, 2, "p");
+        fill(g, 17, 9, 2, 2, "p");
+        pix(g, 11, 9, "h");
+        pix(g, 17, 9, "h");
+      }
+
+      // Рот
+      if (mood === "sleep") {
+        pix(g, 14, 13, "p"); pix(g, 15, 13, "p");
+      } else if (mood === "yay") {
+        fill(g, 13, 13, 4, 1, "p");
+        pix(g, 12, 12, "p"); pix(g, 17, 12, "p");
+      } else {
+        // Фирменная ухмылка набок как на иллюстрации
+        pix(g, 12, 12, "p");
+        pix(g, 13, 13, "p");
+        pix(g, 14, 13, "p");
+        pix(g, 15, 12, "p");
+      }
+
+      // Мигание антенны
+      if (frame % 2 === 1 && (mood === "think" || mood === "yay")) {
+        fill(g, 12, 2, 2, 1, "h");
+      }
+
+      // Вращение шестерёнки
+      if (frame % 2 === 1) {
+        pix(g, 13, 16, "b"); pix(g, 16, 18, "b");
+      }
+
+      // Экран (Смотри)
+      if (mood === "look") {
+        setRows(g, 23, 9, [
+          ".KKKK.",
+          "KbbbbK",
+          "KbhhbK",
+          "KbhbbK",
+          "KbbbbK",
+          "KbhhbK",
+          "KbbbbK",
+          ".KKKK."
+        ]);
+      }
+
+      if (mood === "think") {
+        const shift = frame % 2;
+        pix(g, 22, 6 - shift, "z");
+        pix(g, 24, 4 - shift, "z");
+        pix(g, 26, 2 - shift, "o");
+      }
+
+      if (mood === "sleep") {
+        const shift = frame % 2;
+        pix(g, 22, 6 - shift, "z");
+        pix(g, 24, 3 - shift, "z");
+      }
+
+      return g;
+    }
+
+    // ВАРИАНТ 2: КЛЯКСА В ДУХЕ CLAUDE CODE (компактный минимализм без контура)
+    function drawBlob(mood, frame) {
+      const g = makeGrid(24, 18);
+      const blink = mood !== "sleep" && frame === 3;
+      const wag = frame % 2 === 0;
+
+      // Антенна (с отступом сверху y=2, чтобы всплывающие z/точки не меняли высоту canvas)
+      pix(g, 10, 2, mood === "think" && frame % 2 === 0 ? "h" : "o");
+      pix(g, 10, 3, "b");
+
+      // Клякса-корпус (широкая как в index.html)
+      const rows = [
+        "....hhhhhhhhhhh....", // 4
+        "..eewwwwwwwwwwwee..", // 5
+        ".eeewwbbbwwwbbbwee.", // 6
+        ".EEewbppbwwwbppbwe.", // 7
+        ".EEewbppbwwwbppbwe.", // 8
+        "..eewwbbbwwwbbbwee.", // 9
+        "...wwwwwwBBwwwwww..", // 10
+        "...wwwwwwwwwwwwww..", // 11
+        "....bbbbbbbbbbbb...", // 12: синий ошейник-пояс
+        "....sssssbbsbsss...", // 13
+        "......bb....bb.....", // 14: ножки
+        "......ww....ww.....", // 15
+      ];
+      setRows(g, 1, 4, rows);
+
+      // Хвостик
+      pix(g, wag ? 2 : 1, 11, "e");
+      pix(g, wag ? 1 : 2, 12, "E");
+
+      // Глаза
+      if (mood === "sleep" || blink) {
+        fill(g, 6, 6, 3, 4, "b");
+        fill(g, 12, 6, 3, 4, "b");
+        fill(g, 6, 8, 3, 1, "p");
+        fill(g, 12, 8, 3, 1, "p");
+      } else if (mood === "yay") {
+        fill(g, 6, 6, 3, 4, "b");
+        fill(g, 12, 6, 3, 4, "b");
+        pix(g, 6, 8, "p"); pix(g, 7, 7, "p"); pix(g, 8, 8, "p");
+        pix(g, 12, 8, "p"); pix(g, 13, 7, "p"); pix(g, 14, 8, "p");
+      } else if (mood === "think") {
+        fill(g, 6, 6, 3, 4, "b");
+        fill(g, 12, 6, 3, 4, "b");
+        fill(g, 7, 6, 2, 2, "p");
+        fill(g, 13, 6, 2, 2, "p");
+        pix(g, 7, 6, "h"); pix(g, 13, 6, "h");
+      } else {
+        pix(g, 7, 7, "h"); pix(g, 13, 7, "h");
+      }
+
+      // Улыбка
+      if (mood !== "sleep") {
+        pix(g, 9, 11, "p"); pix(g, 10, 11, "p"); pix(g, 11, 10, "p");
+      }
+
+      if (mood === "hi") {
+        fill(g, 13, 14, 2, 2, ".");
+        const y = frame % 2 === 0 ? 8 : 9;
+        fill(g, 19, y, 2, 2, "w");
+        pix(g, 19, y, "b");
+      }
+
+      if (mood === "look") {
+        fill(g, 18, 10, 2, 1, "w");
+        fill(g, 20, 7, 3, 5, "b");
+        fill(g, 21, 8, 1, 3, "h");
+      }
+
+      if (mood === "think") {
+        pix(g, 18, 4 - (frame % 2), "o");
+        pix(g, 20, 3 - (frame % 2), "b");
+      }
+
+      if (mood === "sleep") {
+        pix(g, 18, 4 - (frame % 2), "z");
+        pix(g, 20, 3 - (frame % 2), "z");
+      }
+
+      return g;
+    }
+
+    // ВАРИАНТ 3: КРУПНАЯ ГОЛОВА-ЭМОДЗИ (максимальная читаемость лица)
+    function drawHead(mood, frame) {
+      const g = makeGrid(28, 20);
+      const blink = mood !== "sleep" && frame === 3;
+      const earBob = frame % 2 === 0 ? 0 : 1;
+
+      const head = [
+        "........KK........", // 0
+        ".......KooK.......", // 1
+        "........KK........", // 2
+        "....KKKKKKKKKK....", // 3
+        "..KKhhhhhhhhhhKK..", // 4
+        ".KhhwwwwwwwwwwhhK.", // 5
+        "KwwwwwwwwwwwwwwwwK", // 6
+        "KwwbbbbwwwwbbbbwwK", // 7
+        "KwbppppbwwbppppbwK", // 8
+        "KwbppppbwwbppppbwK", // 9
+        "KwbppppbwwbppppbwK", // 10
+        "KwwbbbbwwwwbbbbwwK", // 11
+        "KwwwwwwBBBBwwwwwwK", // 12
+        ".KwwwwwwBBwwwwwwK.", // 13
+        ".KwwwwwwwwwwwwwwK.", // 14
+        "..KKbbbbbbbbbbKK..", // 15: ошейник
+        "....KKKKbbKKKK....", // 16: верх шестерёнки
+        ".......KooK.......", // 17
+        "........KK........", // 18
+      ];
+      setRows(g, 2, 0, head);
+
+      // Большие висячие уши по бокам
+      const leftEar = [
+        ".KK.",
+        "KeeK",
+        "KeeK",
+        "KEEK",
+        "KEEK",
+        "KEEK",
+        ".KK."
+      ];
+      setRows(g, 0, 6 + earBob, leftEar);
+      setRows(g, 18, 6 + earBob, leftEar);
+
+      // Нос с бликом
+      pix(g, 9, 12, "o");
+
+      // Глаза
+      if (mood === "sleep" || blink) {
+        fill(g, 5, 8, 4, 3, "b");
+        fill(g, 13, 8, 4, 3, "b");
+        fill(g, 5, 9, 4, 1, "p");
+        fill(g, 13, 9, 4, 1, "p");
+      } else if (mood === "yay") {
+        fill(g, 5, 8, 4, 3, "b");
+        fill(g, 13, 8, 4, 3, "b");
+        pix(g, 6, 8, "p"); pix(g, 7, 8, "p");
+        pix(g, 5, 9, "p"); pix(g, 8, 9, "p");
+        pix(g, 14, 8, "p"); pix(g, 15, 8, "p");
+        pix(g, 13, 9, "p"); pix(g, 16, 9, "p");
+      } else if (mood === "think") {
+        fill(g, 5, 8, 4, 3, "b");
+        fill(g, 13, 8, 4, 3, "b");
+        fill(g, 5, 7, 4, 3, "p");
+        fill(g, 13, 7, 4, 3, "p");
+        pix(g, 6, 7, "h"); pix(g, 14, 7, "h");
+      } else {
+        // Большие блестящие зрачки
+        pix(g, 6, 8, "h"); pix(g, 14, 8, "h");
+        pix(g, 5, 8, "b"); pix(g, 13, 8, "b");
+      }
+
+      // Улыбка по центру под носом (нос на x = 8..13)
+      if (mood === "sleep") {
+        fill(g, 10, 14, 2, 1, "p");
+      } else if (mood === "yay") {
+        fill(g, 8, 14, 6, 1, "p");
+        pix(g, 7, 13, "p"); pix(g, 14, 13, "p");
+      } else {
+        pix(g, 9, 13, "p");
+        fill(g, 10, 14, 3, 1, "p");
+        pix(g, 13, 13, "p");
+      }
+
+      if (mood === "hi") {
+        const y = frame % 2 === 0 ? 10 : 12;
+        setRows(g, 22, y, [
+          ".KK.",
+          "KbbK",
+          "KwwK",
+          ".KK."
+        ]);
+      }
+
+      if (mood === "look") {
+        setRows(g, 22, 8, [
+          ".KKKK.",
+          "KbbbbK",
+          "KbhhbK",
+          "KbbbbK",
+          "KbhhbK",
+          ".KKKK."
+        ]);
+      }
+
+      if (mood === "think") {
+        pix(g, 21, 4 - (frame % 2), "z");
+        pix(g, 23, 2 - (frame % 2), "o");
+      }
+
+      if (mood === "sleep") {
+        pix(g, 21, 4 - (frame % 2), "z");
+        pix(g, 23, 2 - (frame % 2), "z");
+      }
+
+      return g;
+    }
+
+    function drawByStyle(style, mood, frame) {
+      if (style === "blob") return drawBlob(mood, frame);
+      if (style === "head") return drawHead(mood, frame);
+      return drawChibi(mood, frame);
+    }
+
+    function paint(canvas, grid, px) {
+      const H = grid.length;
+      const W = grid[0].length;
+      let minX = W, minY = H, maxX = 0, maxY = 0;
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          if (grid[y][x] === ".") continue;
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
+      }
+      const w = Math.max(1, maxX - minX + 1);
+      const h = Math.max(1, maxY - minY + 1);
+      const ctx = canvas.getContext("2d");
+      canvas.width = w;
+      canvas.height = h;
+      canvas.style.width = (w * px) + "px";
+      canvas.style.height = (h * px) + "px";
+      ctx.clearRect(0, 0, w, h);
+      for (let y = minY; y <= maxY; y++) {
+        for (let x = minX; x <= maxX; x++) {
+          const color = COLORS[grid[y][x]];
+          if (!color) continue;
+          ctx.fillStyle = color;
+          ctx.fillRect(x - minX, y - minY, 1, 1);
+        }
+      }
+    }
+
+    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let currentStyle = "chibi";
+    let darkBg = false;
+    let paused = false;
+    const views = [];
+
+    // Карточки сравнения 3 вариантов сверху
+    const compareEl = document.getElementById("compare");
+    for (const st of STYLES) {
+      const box = document.createElement("div");
+      box.className = "variant-box" + (st.id === currentStyle ? " selected" : "");
+      box.dataset.pick = st.id;
+      box.innerHTML = `
+        <div class="variant-head">
+          <h2>${st.name}</h2>
+          <span class="badge">${st.size}</span>
+        </div>
+        <div class="variant-previews">
+          <canvas data-role="big" aria-label="${st.name} крупно"></canvas>
+          <div class="preview-dark">
+            <canvas data-role="small" aria-label="${st.name} мелко"></canvas>
+            <span>в чате</span>
+          </div>
+        </div>
+        <p>${st.desc}</p>
+      `;
+      const bigC = box.querySelector('[data-role="big"]');
+      const smallC = box.querySelector('[data-role="small"]');
+      views.push({ style: st.id, mood: "glad", canvas: bigC, px: 5 });
+      views.push({ style: st.id, mood: "glad", canvas: smallC, px: 2 });
+      box.addEventListener("click", () => selectStyle(st.id));
+      compareEl.append(box);
+    }
+
+    function mountMoods() {
+      const strip = document.getElementById("strip");
+      const grid = document.getElementById("grid");
+      strip.innerHTML = "";
+      grid.innerHTML = "";
+      views.length = 6; // Оставляем 6 превью в верхнем блоке
+
+      for (const mood of MOODS) {
+        const mini = document.createElement("div");
+        mini.className = "mini" + (darkBg ? " dark" : "");
+        const actorMini = document.createElement("div");
+        actorMini.className = "actor " + mood.move;
+        const cMini = document.createElement("canvas");
+        actorMini.append(cMini);
+        const span = document.createElement("span");
+        span.textContent = mood.title;
+        mini.append(actorMini, span);
+        strip.append(mini);
+        views.push({ style: currentStyle, mood: mood.id, canvas: cMini, px: 2 });
+
+        const card = document.createElement("article");
+        card.className = "card" + (darkBg ? " dark" : "");
+        const actorBig = document.createElement("div");
+        actorBig.className = "actor " + mood.move;
+        const cBig = document.createElement("canvas");
+        actorBig.append(cBig);
+        card.append(actorBig);
+        card.insertAdjacentHTML("beforeend", `<h3>${mood.title}</h3><p>${mood.text}</p>`);
+        grid.append(card);
+        views.push({ style: currentStyle, mood: mood.id, canvas: cBig, px: 7 });
+      }
+      renderAll(0);
+    }
+
+    function selectStyle(styleId) {
+      currentStyle = styleId;
+      document.querySelectorAll("button[data-style]").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.style === styleId);
+      });
+      document.querySelectorAll(".variant-box").forEach((box) => {
+        box.classList.toggle("selected", box.dataset.pick === styleId);
+      });
+      mountMoods();
+    }
+
+    document.querySelectorAll("button[data-style]").forEach((btn) => {
+      btn.addEventListener("click", () => selectStyle(btn.dataset.style));
+    });
+
+    document.getElementById("bg-toggle").addEventListener("click", (e) => {
+      darkBg = !darkBg;
+      e.currentTarget.setAttribute("aria-pressed", darkBg ? "true" : "false");
+      mountMoods();
+    });
+
+    document.getElementById("pause").addEventListener("click", (e) => {
+      paused = !paused;
+      document.documentElement.dataset.paused = paused ? "true" : "false";
+      e.currentTarget.setAttribute("aria-pressed", paused ? "true" : "false");
+      e.currentTarget.textContent = paused ? "Дальше" : "Пауза";
+    });
+
+    function renderAll(frame) {
+      for (const v of views) {
+        paint(v.canvas, drawByStyle(v.style, v.mood, frame), v.px);
+      }
+    }
+
+    mountMoods();
+
+    let last = -1;
+    function tick(now) {
+      const frame = reduced || paused ? 0 : Math.floor(now / 240) % 4;
+      if (frame !== last) {
+        last = frame;
+        renderAll(frame);
+      }
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  </script>
+</body>
+</html>
