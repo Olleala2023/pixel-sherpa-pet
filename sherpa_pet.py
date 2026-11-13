@@ -208,6 +208,7 @@ class SherpaDesktopPet:
         self.voice_pose = None
         self.voice_window = None
         self.history_window = None
+        self.settings_window = None
         self.brain_client = None
 
         self.canvas.bind("<ButtonPress-1>", self.on_press)
@@ -246,6 +247,7 @@ class SherpaDesktopPet:
         self.menu.add_separator()
         self.menu.add_command(label="Спросить голосом… (двойной клик)", command=self.open_voice)
         self.menu.add_command(label="История запросов…", command=self.open_history)
+        self.menu.add_command(label="Настройки нейронки…", command=self.open_settings)
         self.menu.add_separator()
         self.menu.add_command(label="Вкл/Выкл прогулку по панели", command=self.toggle_roaming)
         self.menu.add_command(label="Вкл/Выкл звуки", command=self.toggle_sound)
@@ -387,6 +389,14 @@ class SherpaDesktopPet:
         from sherpa_voice_ui import HistoryWindow
 
         self.history_window = HistoryWindow(self, self._client())
+
+    def open_settings(self):
+        if self.settings_window is not None and self.settings_window.winfo_exists():
+            self.settings_window.lift()
+            return
+        from sherpa_voice_ui import SettingsWindow
+
+        self.settings_window = SettingsWindow(self, self._client())
 
     def on_right_click(self, event):
         try:

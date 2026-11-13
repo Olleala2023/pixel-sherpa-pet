@@ -109,6 +109,15 @@ class BrainClient:
         self.ensure_running()
         return self._req("/stats")
 
+    def settings(self) -> dict:
+        self.ensure_running()
+        return self._req("/settings")
+
+    def save_settings(self, payload: dict) -> dict:
+        """Ключ уходит только мозгу на 127.0.0.1, тот кладёт его в диспетчер учётных данных Windows."""
+        self.ensure_running()
+        return self._req("/settings", json.dumps(payload).encode("utf-8"), timeout=40)
+
 
 class Recorder:
     """Запись 16 кГц моно int16. Колбэк PortAudio только складывает куски в список."""

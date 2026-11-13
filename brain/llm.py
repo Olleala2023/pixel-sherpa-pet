@@ -1,10 +1,10 @@
-"""Нейронка: Pydantic AI + OpenRouter. Ключ — только из OPENROUTER_API_KEY."""
+"""Нейронка: агент Pydantic AI, модель через OpenRouter. Ключ — из keystore (Windows или переменная окружения)."""
 from __future__ import annotations
 
 import json
 import logging
-import os
 import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
@@ -13,10 +13,12 @@ from pydantic_ai.messages import ModelMessagesTypeAdapter, ModelResponse
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
+from . import keystore
 from .config import Config
 
 log = logging.getLogger("brain.llm")
 PRICES_URL = "https://openrouter.ai/api/v1/models"
+KEY_URL = "https://openrouter.ai/api/v1/key"
 
 
 class NoApiKey(Exception):
@@ -42,7 +44,7 @@ class Llm:
 
     def _get_agent(self) -> Agent:
         if self._agent is None:
-            key = os.environ.get("OPENROUTER_API_KEY")
+            key, _src = keystore.get_key(self.cfg.provider)
             if not key:
                 raise NoApiKey()
             model = OpenRouterModel(self.cfg.model, provider=OpenRouterProvider(api_key=key))
@@ -55,16 +57,42 @@ class Llm:
             self._agent = Agent(model, model_settings=settings, instructions=self.cfg.system_prompt)
         return self._agent
 
+    def reset(self) -> None:
+        """Сменились провайдер, модель или ключ — агент соберётся заново при следующем вопросе."""
+        self._agent = None
+
+    def _load_prices(self) -> dict[str, tuple[float, float]]:
+        if self._prices is None:
+            with urllib.request.urlopen(PRICES_URL, timeout=10) as r:
+                data = json.load(r)["data"]
+            self._prices = {m["id"]: (float(m["pricing"]["prompt"]), float(m["pricing"]["completion"])) for m in data}
+        return self._prices
+
+    def check(self, model: str, key: str | None) -> dict:
+        """Бесплатная проверка без вопроса к модели: есть ли такая модель в OpenRouter и принят ли ключ.
+        Значения: True / False / None (не проверил — нет связи)."""
+        out = {"model_ok": None, "key_ok": None}
+        try:
+            self._prices = None
+            out["model_ok"] = model in self._load_prices()
+        except Exception as e:  # noqa: BLE001
+            log.warning("не проверил модель: %s", type(e).__name__)
+        if key:
+            req = urllib.request.Request(KEY_URL, headers={"Authorization": f"Bearer {key}"})
+            try:
+                with urllib.request.urlopen(req, timeout=10):
+                    out["key_ok"] = True
+            except urllib.error.HTTPError as e:
+                out["key_ok"] = False if e.code in (401, 403) else None
+                log.warning("проверка ключа: HTTP %s", e.code)
+            except Exception as e:  # noqa: BLE001
+                log.warning("не проверил ключ: %s", type(e).__name__)
+        return out
+
     def _price_cost(self, tokens_in: int, tokens_out: int) -> float | None:
         """Запасной расчёт стоимости по прайсу OpenRouter, если cost не пришёл в ответе."""
         try:
-            if self._prices is None:
-                with urllib.request.urlopen(PRICES_URL, timeout=10) as r:
-                    data = json.load(r)["data"]
-                self._prices = {
-                    m["id"]: (float(m["pricing"]["prompt"]), float(m["pricing"]["completion"])) for m in data
-                }
-            p = self._prices.get(self.cfg.model)
+            p = self._load_prices().get(self.cfg.model)
             return None if p is None else tokens_in * p[0] + tokens_out * p[1]
         except Exception as e:  # noqa: BLE001
             log.warning("не получил прайс OpenRouter: %s", e)

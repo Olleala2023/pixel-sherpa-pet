@@ -13,9 +13,10 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from . import keystore
 from . import llm as llm_mod
 from . import stt as stt_mod
-from .config import AUDIO_DIR, DB_PATH, Config
+from .config import AUDIO_DIR, DB_PATH, PROVIDERS, Config, save_settings
 from .db import Db
 
 log = logging.getLogger("brain.server")
@@ -30,6 +31,13 @@ class AskIn(BaseModel):
     audio_sec: float | None = None
     stt_ms: int | None = None
     source: str = "pet"
+
+
+class SettingsIn(BaseModel):
+    provider: str = "openrouter"
+    model: str
+    api_key: str | None = None  # пусто — ключ не меняем
+    clear_key: bool = False  # удалить сохранённый в Windows ключ
 
 
 class ApiError(Exception):
@@ -160,7 +168,7 @@ def create_app(cfg: Config) -> FastAPI:
             a = await brain.llm.ask(question, history)
         except llm_mod.NoApiKey:
             brain.db.insert(**base, status="error", error="no_api_key")
-            raise ApiError(500, "no_api_key", "Нет ключа: задай переменную окружения OPENROUTER_API_KEY.")
+            raise ApiError(500, "no_api_key", "Нет ключа API — открой настройки (шестерёнка в окне Шерпы) и вставь ключ OpenRouter.")
         except Exception as e:  # noqa: BLE001
             log.exception("ошибка нейронки")
             brain.db.insert(**base, status="error", error=f"{type(e).__name__}: {e}"[:500])
@@ -195,6 +203,48 @@ def create_app(cfg: Config) -> FastAPI:
             "cost_usd": a.cost_usd,
             "llm_ms": a.llm_ms,
         }
+
+    def settings_view() -> dict:
+        _key, src = keystore.get_key(cfg.provider)
+        return {"provider": cfg.provider, "providers": PROVIDERS, "model": cfg.model, "key_source": src}
+
+    @app.get("/settings")
+    async def get_settings():
+        return settings_view()
+
+    @app.post("/settings")
+    async def post_settings(body: SettingsIn):
+        """Проверяет модель и ключ (бесплатно, без вопроса к модели) и сохраняет. Ключ — только в Windows."""
+        brain.touch()
+        provider, model = body.provider.strip(), body.model.strip()
+        new_key = (body.api_key or "").strip() or None
+        if provider not in PROVIDERS:
+            raise ApiError(400, "bad_provider", f"Неизвестный провайдер: {provider}.")
+        if not model:
+            raise ApiError(400, "bad_model", "Название модели пустое.")
+        if new_key:
+            check_key = new_key
+        elif body.clear_key:  # после удаления останется только переменная окружения
+            check_key = os.environ.get(keystore.ENV.get(provider, ""), "") or None
+        else:
+            check_key = keystore.get_key(provider)[0]
+        res = await asyncio.to_thread(brain.llm.check, model, check_key)
+        if res["key_ok"] is False:
+            raise ApiError(400, "bad_key", "OpenRouter не принял ключ — проверь, что вставил его целиком.")
+        if res["model_ok"] is False:
+            raise ApiError(400, "bad_model", f"В OpenRouter нет модели «{model}». Точное имя — на openrouter.ai/models.")
+        if body.clear_key:
+            keystore.delete_key(provider)
+        if new_key:
+            keystore.set_key(provider, new_key)
+        save_settings(provider, model)
+        cfg.provider, cfg.model = provider, model
+        brain.llm.reset()
+        log.info("настройки: провайдер %s, модель %s, ключ %s", provider, model,
+                 "новый" if new_key else ("удалён" if body.clear_key else "прежний"))
+        out = settings_view()
+        out["checked"] = res
+        return out
 
     @app.get("/history")
     async def history(limit: int = 50):

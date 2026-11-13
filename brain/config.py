@@ -19,8 +19,10 @@ DEFAULT_SYSTEM_PROMPT = (
     "Если вопрос неясен — задай один уточняющий вопрос."
 )
 
-DEFAULT_TOML = f'''# Настройки мозга Шерпы. Ключ OpenRouter сюда НЕ пишется — только переменная окружения OPENROUTER_API_KEY.
+DEFAULT_TOML = f'''# Настройки мозга Шерпы. Ключ API сюда НЕ пишется: он в диспетчере учётных данных Windows (окно «Настройки»)
+# или в переменной окружения OPENROUTER_API_KEY. Провайдер и модель тоже меняются в окне «Настройки».
 port = 8765
+provider = "openrouter"
 model = "deepseek/deepseek-v4-flash"
 daily_limit_usd = 0.5
 max_answer_tokens = 1000
@@ -57,6 +59,7 @@ class VadCfg:
 @dataclass
 class Config:
     port: int = 8765
+    provider: str = "openrouter"
     model: str = "deepseek/deepseek-v4-flash"
     daily_limit_usd: float = 0.5
     max_answer_tokens: int = 1000
@@ -70,6 +73,30 @@ class Config:
     gigaam_tokens: Path = field(default_factory=Path)
     gigaam_threads: int = 4
     vad: VadCfg = field(default_factory=lambda: VadCfg(BRAIN_DIR / "models" / "silero_vad.onnx"))
+
+
+PROVIDERS = {"openrouter": "OpenRouter"}  # на будущее: сюда добавляются другие
+
+
+def save_settings(provider: str, model: str, path: Path = CONFIG_PATH) -> None:
+    """Меняет provider и model в config.toml, не трогая комментарии и секции ([gigaam] тоже имеет model)."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    top_end = next((i for i, ln in enumerate(lines) if ln.lstrip().startswith("[")), len(lines))
+    vals = {"provider": provider, "model": model}
+    for i in range(top_end):
+        key = lines[i].split("=", 1)[0].strip()
+        if key in vals and "=" in lines[i]:
+            lines[i] = f"{key} = {_toml_str(vals.pop(key))}"
+    at = next((i for i, ln in enumerate(lines) if not ln.lstrip().startswith("#")), len(lines))
+    for key, v in vals.items():  # строки не было (старый конфиг) — добавляем после шапки-комментария
+        lines.insert(at, f"{key} = {_toml_str(v)}")
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def _toml_str(v: str) -> str:
+    return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def load_config(path: Path = CONFIG_PATH) -> Config:

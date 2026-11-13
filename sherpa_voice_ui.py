@@ -9,6 +9,7 @@ Tk рисует круги и скругления без сглаживания
 from __future__ import annotations
 
 import tkinter as tk
+import webbrowser
 from tkinter import ttk
 
 from PIL import Image, ImageDraw, ImageTk
@@ -33,6 +34,8 @@ C = {
     "red_dk": "#C93A3F",
     "hover": "#E2EBF3",
     "sel": "#D4EBF8",
+    "you_bg": "#DDEEFA",  # пузырь вопроса: светло-голубой, не перетягивает внимание
+    "dog_bg": "#EDF2F7",  # пузырь ответа: чуть темнее фона карточки
 }
 UI = "Segoe UI"
 UI_SB = "Segoe UI Semibold"
@@ -40,6 +43,7 @@ ICONS = "Segoe MDL2 Assets"
 I_MIC, I_STOP, I_SEND, I_COPY, I_CLOSE, I_NEW, I_REFRESH, I_HISTORY = (
     "", "", "", "", "", "", "", "",
 )
+I_SETTINGS, I_EYE = "\ue713", "\ue7b3"
 RADIUS = 16
 INSET = 12
 SS = 4  # во сколько раз крупнее рисуем перед уменьшением (сглаживание)
@@ -320,12 +324,12 @@ class Chat(tk.Canvas):
         you = who == "you"
         maxw = int(self.w * (0.78 if you else 0.9))
         tid = self.create_text(0, 0, text=text, width=maxw - 2 * self.PADX, anchor="nw", font=(UI, 10),
-                               fill=C["white"] if you else C["ink"])
+                               fill=C["ink"])
         x1, y1, x2, y2 = self.bbox(tid)
         bw, bh = (x2 - x1) + 2 * self.PADX, (y2 - y1) + 2 * self.PADY
         y = self.used + (self.GAP if self.used else 0)
         bx = self.w - bw if you else 0
-        img = round_image(bw, bh, self.R, C["blue"] if you else C["chat"], C["card"], tail="br" if you else "bl")
+        img = round_image(bw, bh, self.R, C["you_bg"] if you else C["dog_bg"], C["card"], tail="br" if you else "bl")
         self.imgs.append(img)
         self.create_image(bx, y, image=img, anchor="nw")
         self.coords(tid, bx + self.PADX, y + self.PADY)
@@ -353,6 +357,8 @@ class VoiceWindow(CardWindow):
 
         IconButton(self.head_btns, I_HISTORY, size=28, bg=C["card"], fg=C["muted"], hover=C["hover"],
                    command=pet.open_history, icon_size=10).pack(side="right", padx=(0, 2))
+        IconButton(self.head_btns, I_SETTINGS, size=28, bg=C["card"], fg=C["muted"], hover=C["hover"],
+                   command=pet.open_settings, icon_size=10).pack(side="right")
 
         # --- переписка: появляется над строкой ввода после первого вопроса ---
         self.chat = Chat(self.body, self.WIDTH - 2 * INSET)
@@ -748,3 +754,190 @@ class DetailWindow(CardWindow):
         for text, tag in parts:
             txt.insert("end", text, tag or ())
         txt.config(state="disabled")
+
+
+class PillButton(tk.Canvas):
+    """Кнопка-таблетка с текстом (гладкие края через round_image)."""
+
+    def __init__(self, parent, text, command, w=120, h=34, bg=C["blue"], hover=C["blue_dk"], fg=C["white"],
+                 parent_bg=C["card"]):
+        super().__init__(parent, width=w, height=h, bg=parent_bg, highlightthickness=0, bd=0, cursor="hand2")
+        self.command, self.enabled = command, True
+        self.imgs = {k: round_image(w, h, h // 2, c, parent_bg) for k, c in
+                     (("bg", bg), ("hover", hover), ("off", C["border"]))}
+        self.img = self.create_image(0, 0, image=self.imgs["bg"], anchor="nw")
+        self.create_text(w / 2, h / 2, text=text, fill=fg, font=(UI_SB, 10))
+        self.bind("<Enter>", lambda e: self.enabled and self.itemconfig(self.img, image=self.imgs["hover"]))
+        self.bind("<Leave>", lambda e: self.enabled and self.itemconfig(self.img, image=self.imgs["bg"]))
+        self.bind("<ButtonRelease-1>", lambda e: self.enabled and self.command())
+
+    def set_enabled(self, on: bool):
+        self.enabled = on
+        self.config(cursor="hand2" if on else "arrow")
+        self.itemconfig(self.img, image=self.imgs["bg" if on else "off"])
+
+
+def _combo_style(root) -> str:
+    st = ttk.Style(root)
+    if st.theme_use() != "clam":
+        st.theme_use("clam")
+    st.configure("Sherpa.TCombobox", fieldbackground=C["white"], background=C["white"], foreground=C["ink"],
+                 bordercolor=C["border"], lightcolor=C["white"], darkcolor=C["white"], arrowcolor=C["muted"],
+                 padding=(8, 6), relief="flat")
+    st.map("Sherpa.TCombobox", fieldbackground=[("readonly", C["white"])], foreground=[("readonly", C["ink"])],
+           bordercolor=[("focus", C["blue"])], selectbackground=[("readonly", C["white"])],
+           selectforeground=[("readonly", C["ink"])])
+    return "Sherpa.TCombobox"
+
+
+class SettingsWindow(CardWindow):
+    """Провайдер, модель и ключ API. Мозг бесплатно проверяет ключ и модель и кладёт ключ в диспетчер
+    учётных данных Windows — не в config.toml и не в базу. Пустое поле ключа — ключ не меняется."""
+
+    WIDTH = 420
+    SRC = {"windows": "сохранён в диспетчере учётных данных Windows",
+           "env": "берётся из переменной окружения OPENROUTER_API_KEY",
+           None: "не задан — справка не сможет отвечать"}
+
+    def __init__(self, pet, client: BrainClient):
+        super().__init__(pet.root, pet, self.WIDTH, 300, "Настройки", "Загружаю…", pose="look")
+        self.client = client
+        self.worker = _Worker(self)
+        self.providers: dict[str, str] = {"openrouter": "OpenRouter"}
+        self.key_source = None
+
+        self._label("Провайдер")
+        self.provider = tk.StringVar(value="OpenRouter")
+        self.combo = ttk.Combobox(self.body, textvariable=self.provider, state="readonly",
+                                  values=list(self.providers.values()), style=_combo_style(self), font=(UI, 10))
+        self.combo.pack(fill="x")
+
+        self._label("Модель")
+        self.model = self._entry()
+        self._link_line("Точное имя — на ", "openrouter.ai/models", "https://openrouter.ai/models")
+
+        self._label("Ключ API")
+        self.key = self._entry(show="•", eye=True)
+        self.key_info = tk.Label(self.body, text="", bg=C["card"], fg=C["muted"], font=(UI, 8), anchor="w",
+                                 justify="left", width=1, wraplength=self.WIDTH - 2 * INSET - 4)
+        self.key_info.pack(fill="x", pady=(4, 0))
+        row = tk.Frame(self.body, bg=C["card"])
+        row.pack(fill="x")
+        self._link_line("Где взять — ", "openrouter.ai/keys", "https://openrouter.ai/keys", parent=row)
+        self.del_link = LinkButton(row, "Удалить сохранённый ключ", self.clear_key)
+
+        btns = tk.Frame(self.body, bg=C["card"])
+        btns.pack(fill="x", pady=(14, 0))
+        self.save_btn = PillButton(btns, "Сохранить", self.save)
+        self.save_btn.pack(side="right")
+        LinkButton(btns, "Закрыть", self.close).pack(side="right", padx=(0, 8))
+        tk.Label(btns, text="При сохранении проверю ключ\nи модель в OpenRouter — бесплатно", bg=C["card"],
+                 fg=C["soft"], font=(UI, 8), justify="left").pack(side="left")
+
+        self.fit()
+        self.focus_force()
+        self.worker.run(self.client.settings, self._fill, self._on_error)
+
+    # --- поля ---
+    def _label(self, text):
+        tk.Label(self.body, text=text.upper(), bg=C["card"], fg=C["muted"], font=(UI_SB, 8),
+                 anchor="w").pack(fill="x", pady=(12, 4))
+
+    def _entry(self, show=None, eye=False) -> tk.Entry:
+        e = tk.Entry(self.body, font=(UI, 10), bg=C["white"], fg=C["ink"], relief="flat", bd=0,
+                     highlightthickness=0, insertbackground=C["blue_dk"], show=show or "")
+        box = Panel(self.body, C["white"], C["card"], r=10, outline=C["border"], inner=e, pad=8, height=36)
+        e.lift(box)
+        box.pack(fill="x")
+        e.bind("<Button-1>", lambda ev: self.focus_force())
+        e.bind("<Return>", lambda ev: self.save())
+        if eye:  # глазок справа в поле: показать/скрыть набранный ключ
+            b = IconButton(box, I_EYE, size=26, bg=C["white"], fg=C["soft"], hover=C["hover"],
+                           parent_bg=C["white"], icon_size=10,
+                           command=lambda: e.config(show="" if e.cget("show") else "•"))
+
+            def draw(ev):
+                box._draw(ev)
+                box.itemconfig("inner", width=ev.width - 16 - 30)
+                box.delete("eye")
+                box.create_window(ev.width - 5, ev.height / 2, window=b, anchor="e", tags="eye")
+
+            box.bind("<Configure>", draw)
+        return e
+
+    def _link_line(self, prefix, text, url, parent=None):
+        row = tk.Frame(parent or self.body, bg=C["card"])
+        if parent:
+            row.pack(side="left", pady=(3, 0))
+        else:
+            row.pack(fill="x", pady=(3, 0))
+        tk.Label(row, text=prefix, bg=C["card"], fg=C["soft"], font=(UI, 8)).pack(side="left")
+        lnk = tk.Label(row, text=text, bg=C["card"], fg=C["blue_dk"], font=(UI, 8, "underline"), cursor="hand2")
+        lnk.pack(side="left")
+        lnk.bind("<Button-1>", lambda e: webbrowser.open(url))
+
+    # --- данные ---
+    def _fill(self, st: dict) -> None:
+        self.providers = st.get("providers") or self.providers
+        self.combo.config(values=list(self.providers.values()))
+        self.provider.set(self.providers.get(st.get("provider"), "OpenRouter"))
+        self.model.delete(0, "end")
+        self.model.insert(0, st.get("model", ""))
+        self._key_state(st.get("key_source"))
+        self.set_subtitle("Нейронка для справки")
+
+    def _key_state(self, src) -> None:
+        self.key_source = src
+        self.key_info.config(text="Сейчас ключ " + self.SRC.get(src, self.SRC[None]) +
+                                  ". Пустое поле — ключ не меняется.",
+                             fg=C["red"] if src is None else C["muted"])
+        if src == "windows":
+            self.del_link.pack(side="right")
+        else:
+            self.del_link.pack_forget()
+        self.fit()
+
+    def _provider_id(self) -> str:
+        name = self.provider.get()
+        return next((k for k, v in self.providers.items() if v == name), "openrouter")
+
+    def save(self, clear_key: bool = False) -> None:
+        if not self.save_btn.enabled:
+            return
+        payload = {"provider": self._provider_id(), "model": self.model.get().strip(),
+                   "api_key": self.key.get().strip() or None, "clear_key": clear_key}
+        self.save_btn.set_enabled(False)
+        self.set_subtitle("Проверяю в OpenRouter…")
+        self.worker.run(lambda: self.client.save_settings(payload), self._on_saved, self._on_error)
+
+    def clear_key(self) -> None:
+        self.key.delete(0, "end")
+        self.save(clear_key=True)
+
+    def _on_saved(self, st: dict) -> None:
+        self.save_btn.set_enabled(True)
+        self.key.delete(0, "end")
+        self._key_state(st.get("key_source"))
+        chk = st.get("checked") or {}
+        if chk.get("model_ok") is None:
+            note = "проверить не удалось: нет связи"
+        elif st.get("key_source") and chk.get("key_ok") is None:
+            note = "ключ не проверил: нет связи"
+        elif not st.get("key_source"):
+            note = "модель есть, ключа нет"
+        else:
+            note = "ключ и модель в порядке"
+        self.set_subtitle(f"Сохранено · {note}")
+
+    def _on_error(self, e: Exception) -> None:
+        self.save_btn.set_enabled(True)
+        self.set_subtitle(err_text(e), True)
+
+    def set_subtitle(self, text, error=False):
+        super().set_subtitle(text, error)
+        self.fit()
+
+    def close(self) -> None:
+        self.worker.alive = False
+        self.pet.settings_window = None
+        self.destroy()
