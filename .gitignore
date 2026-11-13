@@ -7,3 +7,7 @@ claude-pet/
 sherpa-state.txt
 __pycache__/
 *.pyc
+
+# мозг: база, аудио, лог
+brain/data/
+*.canvas.bak

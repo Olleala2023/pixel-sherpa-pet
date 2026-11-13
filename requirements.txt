@@ -1,0 +1,8 @@
+# Голосовая справка: мозг (brain/) и запись в псе. Версии — по факту установки 13.11.2026.
+numpy==2.4.4
+pillow
+sherpa-onnx==2.0.1
+sounddevice==0.5.6
+pydantic-ai-slim[openrouter]==2.68.0
+fastapi==0.143.3
+uvicorn==0.46.0
