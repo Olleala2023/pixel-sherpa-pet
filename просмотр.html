@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Все пиктограммы</title>
+  <style>
+    :root {
+      --ink: #241c18;
+      --muted: #5c514b;
+      --paper: #f3efe9;
+      --card: #fff;
+      color-scheme: light;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: "Segoe UI", system-ui, sans-serif;
+      line-height: 1.45;
+    }
+
+    .wrap {
+      width: min(980px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 32px 0 72px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.7rem;
+      letter-spacing: -0.02em;
+    }
+
+    .lead {
+      margin: 0 0 18px;
+      max-width: 58ch;
+      color: var(--muted);
+    }
+
+    nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 0 0 28px;
+    }
+
+    nav a {
+      color: var(--ink);
+      text-decoration: none;
+      background: var(--card);
+      border: 1px solid #e2d9d1;
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-size: 0.92rem;
+    }
+
+    nav a:hover { border-color: #c9b8ae; }
+
+    nav a:focus-visible {
+      outline: 2px solid #d87656;
+      outline-offset: 2px;
+    }
+
+    section { margin: 0 0 42px; }
+
+    h2 {
+      margin: 0 0 6px;
+      font-size: 1.25rem;
+    }
+
+    section p {
+      margin: 0 0 14px;
+      color: var(--muted);
+    }
+
+    .frame {
+      width: 100%;
+      border: 0;
+      border-radius: 18px;
+      background: var(--card);
+      box-shadow: 0 10px 28px rgb(60 36 24 / 8%);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 12px;
+    }
+
+    figure {
+      margin: 0;
+      background: var(--card);
+      border-radius: 16px;
+      padding: 12px;
+      box-shadow: 0 8px 22px rgb(60 36 24 / 6%);
+      display: grid;
+      justify-items: center;
+      align-content: end;
+      gap: 8px;
+    }
+
+    figcaption {
+      font-size: 0.9rem;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    img {
+      max-width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    .pixel { image-rendering: pixelated; }
+
+    .slime img { width: 160px; height: 160px; }
+
+    .pet img { width: 150px; height: auto; }
+
+    .cast {
+      display: grid;
+      gap: 14px;
+    }
+
+    .who {
+      background: var(--card);
+      border-radius: 16px;
+      padding: 12px 14px 14px;
+      box-shadow: 0 8px 22px rgb(60 36 24 / 6%);
+    }
+
+    .who h3 {
+      margin: 0 0 10px;
+      font-size: 1rem;
+      font-weight: 650;
+    }
+
+    .poses {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 18px;
+    }
+
+    .poses figure {
+      box-shadow: none;
+      background: transparent;
+      padding: 0;
+    }
+
+    .sheet {
+      width: 48px;
+      height: 96px;
+      background-image: var(--sheet);
+      background-repeat: no-repeat;
+      background-size: 336px 288px;
+      image-rendering: pixelated;
+      translate: 0 0;
+    }
+
+    .walk { animation: walk 0.48s steps(3, end) infinite; }
+    .type { animation: type 0.36s steps(2, end) infinite; }
+    .read { animation: read 0.7s steps(2, end) infinite; }
+
+    @keyframes walk {
+      from { background-position: 0 0; }
+      to { background-position: -144px 0; }
+    }
+
+    @keyframes type {
+      from { background-position: -144px 0; }
+      to { background-position: -240px 0; }
+    }
+
+    @keyframes read {
+      from { background-position: -240px 0; }
+      to { background-position: -336px 0; }
+    }
+
+    .wide { grid-column: 1 / -1; }
+
+    .wide img { width: min(100%, 751px); }
+
+    @media (prefers-reduced-motion: reduce) {
+      .sheet { animation: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Все пиктограммы в одном месте</h1>
+    <p class="lead">Прокрутите страницу вниз. Здесь наш персонаж и то, что нашлось в скачанных репозиториях: живые сцены, ролики и покадровые спрайты.</p>
+    <nav aria-label="Разделы">
+      <a href="#dog">Робопёс</a>
+      <a href="#nash">Наш</a>
+      <a href="#avatars">agent-avatars</a>
+      <a href="#sprites">Слайм</a>
+      <a href="#arcade">Офис</a>
+      <a href="#hatch">Питомцы</a>
+      <a href="#deadpool">Дэдпул</a>
+      <a href="#mascot">pixel-mascot</a>
+    </nav>
+
+    <section id="dog">
+      <h2>Робопёс Sherpa</h2>
+      <p>Три пиксельных стиля и готовый пакет GIF/PNG в папке <code>sherpa-chibi-pack/</code>. Отдельно и с переключением фона — на странице <a href="собачка.html">собачка.html</a>.</p>
+      <div class="grid" style="margin-bottom: 14px">
+        <figure>
+          <img src="робопёс-гладкий.png" alt="Гладкий робопёс: белое тело, синие глаза, серые уши, антенна и шестерёнка" width="220">
+          <figcaption>Гладкий вариант (робопёс-гладкий.png)</figcaption>
+        </figure>
+        <figure>
+          <img class="pixel" src="sherpa-chibi-pack/gifs/sherpa_idle.gif" alt="Чиби Шерпа: сидит" width="120">
+          <figcaption>Чиби GIF — Рад</figcaption>
+        </figure>
+        <figure>
+          <img class="pixel" src="sherpa-chibi-pack/gifs/sherpa_walk.gif" alt="Чиби Шерпа: шагает" width="120">
+          <figcaption>Чиби GIF — Ходит</figcaption>
+        </figure>
+        <figure>
+          <img class="pixel" src="sherpa-chibi-pack/gifs/sherpa_wave.gif" alt="Чиби Шерпа: машет лапой" width="120">
+          <figcaption>Чиби GIF — Привет</figcaption>
+        </figure>
+        <figure>
+          <img class="pixel" src="sherpa-chibi-pack/gifs/sherpa_look.gif" alt="Чиби Шерпа: экран чата" width="120">
+          <figcaption>Чиби GIF — Смотри</figcaption>
+        </figure>
+        <figure>
+          <img class="pixel" src="sherpa-chibi-pack/gifs/sherpa_jump.gif" alt="Чиби Шерпа: прыгает" width="120">
+          <figcaption>Чиби GIF — Ура</figcaption>
+        </figure>
+        <figure>
+          <img class="pixel" src="sherpa-chibi-pack/gifs/sherpa_sleep.gif" alt="Чиби Шерпа: спит" width="120">
+          <figcaption>Чиби GIF — Спит</figcaption>
+        </figure>
+      </div>
+      <iframe class="frame" src="собачка.html" title="Эмодзи робопса" style="height: 1480px"></iframe>
+    </section>
+
+    <section id="nash">
+      <h2>Наш персонаж</h2>
+      <p>Тот, что сидит на уголке карточки. Кнопки внутри кадра переключают, как он двигается.</p>
+      <iframe class="frame" src="index.html" title="Наш персонаж" style="height: 1040px"></iframe>
+    </section>
+
+    <section id="avatars">
+      <h2>agent-avatars</h2>
+      <p>Живая сцена мастерской: робот, кот, дракон и остальные сами моргают и качаются. Ниже — готовые ролики других миров.</p>
+      <iframe class="frame" src="agent-avatars/docs/previews/index.html" title="Сцены agent-avatars" style="height: 1520px"></iframe>
+      <div class="grid" style="margin-top: 12px">
+        <figure class="wide"><img src="agent-avatars/docs/office.gif" alt="Пиксельный офис с персонажами"><figcaption>Офис</figcaption></figure>
+        <figure class="wide"><img src="agent-avatars/docs/city.gif" alt="Городская сцена"><figcaption>Город</figcaption></figure>
+        <figure class="wide"><img src="agent-avatars/docs/home-cats.gif" alt="Коты дома"><figcaption>Коты дома</figcaption></figure>
+        <figure class="wide"><img src="agent-avatars/docs/lava-dragons.gif" alt="Драконы в лаве"><figcaption>Драконы</figcaption></figure>
+        <figure class="wide"><img src="agent-avatars/docs/sakura-anime.gif" alt="Сцена с сакурой"><figcaption>Сакура</figcaption></figure>
+        <figure class="wide"><img src="agent-avatars/docs/meadow-mixed.gif" alt="Луг с разными персонажами"><figcaption>Луг</figcaption></figure>
+        <figure><img src="agent-avatars/docs/moods.gif" alt="Смена настроений"><figcaption>Настроения</figcaption></figure>
+        <figure><img src="agent-avatars/docs/talk.gif" alt="Персонажи разговаривают"><figcaption>Разговор</figcaption></figure>
+        <figure><img src="agent-avatars/docs/spawn-and-leave.gif" alt="Персонаж появляется и уходит"><figcaption>Появился и ушёл</figcaption></figure>
+        <figure><img src="agent-avatars/docs/pr-merged.gif" alt="Сцена после слияния"><figcaption>Задача сдана</figcaption></figure>
+      </div>
+    </section>
+
+    <section id="sprites">
+      <h2>agent-sprites — слайм</h2>
+      <p>Один и тот же персонаж в разных действиях.</p>
+      <div class="grid slime">
+        <figure><img class="pixel" src="agent-sprites/assets/slime_idle.gif" alt="Слайм стоит"><figcaption>Стоит</figcaption></figure>
+        <figure><img class="pixel" src="agent-sprites/assets/slime_walk.gif" alt="Слайм идёт"><figcaption>Идёт</figcaption></figure>
+        <figure><img class="pixel" src="agent-sprites/assets/slime_jump.gif" alt="Слайм прыгает"><figcaption>Прыгает</figcaption></figure>
+        <figure><img class="pixel" src="agent-sprites/assets/slime_attack3.gif" alt="Слайм атакует"><figcaption>Атакует</figcaption></figure>
+        <figure><img class="pixel" src="agent-sprites/assets/slime_run_attack.gif" alt="Слайм бежит в атаку"><figcaption>Бежит в атаку</figcaption></figure>
+        <figure><img class="pixel" src="agent-sprites/assets/slime_dead.gif" alt="Слайм падает"><figcaption>Упал</figcaption></figure>
+        <figure class="wide"><img class="pixel" src="agent-sprites/assets/preview.gif" alt="Общий просмотр слайма"><figcaption>Все кадры подряд</figcaption></figure>
+      </div>
+    </section>
+
+    <section id="arcade">
+      <h2>agent-arcade — шестеро в офисе</h2>
+      <p>Каждый лист: идёт, печатает, читает. Кадры взяты из их спрайтов.</p>
+      <div class="cast" id="arcade-cast"></div>
+    </section>
+
+    <section id="hatch">
+      <h2>hatch-pet — готовые примеры</h2>
+      <p>Два персонажа из примеров: стоит, бежит, машет и сцена неудачи.</p>
+      <h3>homelander</h3>
+      <div class="grid pet">
+        <figure><img src="hatch-pet-claude/examples/homelander/previews/idle.gif" alt="homelander стоит"><figcaption>Стоит</figcaption></figure>
+        <figure><img src="hatch-pet-claude/examples/homelander/previews/running-right.gif" alt="homelander бежит вправо"><figcaption>Бежит вправо</figcaption></figure>
+        <figure><img src="hatch-pet-claude/examples/homelander/previews/running-left.gif" alt="homelander бежит влево"><figcaption>Бежит влево</figcaption></figure>
+        <figure><img src="hatch-pet-claude/examples/homelander/previews/waving.gif" alt="homelander машет"><figcaption>Машет</figcaption></figure>
+        <figure><img src="hatch-pet-claude/examples/homelander/previews/failed.gif" alt="homelander в неудаче"><figcaption>Не вышло</figcaption></figure>
+      </div>
+      <h3>dark-knight</h3>
+      <div class="grid pet">
+        <figure><img src="hatch-pet-claude/examples/dark-knight/previews/idle.gif" alt="dark-knight стоит"><figcaption>Стоит</figcaption></figure>
+        <figure><img src="hatch-pet-claude/examples/dark-knight/previews/running-right.gif" alt="dark-knight бежит вправо"><figcaption>Бежит вправо</figcaption></figure>
+        <figure><img src="hatch-pet-claude/examples/dark-knight/previews/running-left.gif" alt="dark-knight бежит влево"><figcaption>Бежит влево</figcaption></figure>
+        <figure><img src="hatch-pet-claude/examples/dark-knight/previews/waving.gif" alt="dark-knight машет"><figcaption>Машет</figcaption></figure>
+        <figure><img src="hatch-pet-claude/examples/dark-knight/previews/failed.gif" alt="dark-knight в неудаче"><figcaption>Не вышло</figcaption></figure>
+      </div>
+    </section>
+
+    <section id="deadpool">
+      <h2>claude-pet — Дэдпул</h2>
+      <p>Кадры пакета Shimeji, сложенные в короткие циклы: шаг, сидение, лазанье и праздник.</p>
+      <div class="grid slime" id="deadpool-frames"></div>
+    </section>
+
+    <section id="mascot">
+      <h2>pixel-mascot</h2>
+      <p>Одиннадцать персонажей набора: печать, чек, степлер, конверт, калькулятор, папка, копилка, карандаш, портфель, монета и касса. Живой пример с прыжками лежит в папке <code>pixel-mascot</code> и собирается отдельно.</p>
+      <figure class="wide">
+        <img src="pixel-mascot/docs/characters.png" alt="Одиннадцать пиксельных персонажей pixel-mascot">
+      </figure>
+    </section>
+  </div>
+  <script>
+    const colors = [
+      ["Синий", "char_0"],
+      ["Зелёный", "char_1"],
+      ["Красный", "char_2"],
+      ["Фиолетовый", "char_3"],
+      ["Оранжевый", "char_4"],
+      ["Бирюзовый", "char_5"],
+    ];
+    const poses = [
+      ["walk", "Идёт"],
+      ["type", "Печатает"],
+      ["read", "Читает"],
+    ];
+    const cast = document.getElementById("arcade-cast");
+    for (const [name, file] of colors) {
+      const who = document.createElement("div");
+      who.className = "who";
+      who.innerHTML = `<h3>${name}</h3>`;
+      const row = document.createElement("div");
+      row.className = "poses";
+      for (const [cls, label] of poses) {
+        const figure = document.createElement("figure");
+        figure.innerHTML = `<div class="sheet ${cls}" style="--sheet:url('agent-arcade/media/characters/${file}.png')"></div><figcaption>${label}</figcaption>`;
+        row.append(figure);
+      }
+      who.append(row);
+      cast.append(who);
+    }
+
+    const cycles = [
+      ["Идёт", "1,2,3", 160],
+      ["Сидит", "11", 0],
+      ["Лезет", "12,13,14", 180],
+      ["Празднует", "26,27,28,29", 140],
+    ];
+    const pool = document.getElementById("deadpool-frames");
+    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    for (const [label, list, ms] of cycles) {
+      const frames = list.split(",");
+      const figure = document.createElement("figure");
+      const img = document.createElement("img");
+      img.className = "pixel";
+      img.alt = "Дэдпул: " + label;
+      img.width = 128;
+      img.height = 128;
+      const src = (n) => `claude-pet/sprites/deadpool/img/shime${n}.png`;
+      img.src = src(frames[0]);
+      const cap = document.createElement("figcaption");
+      cap.textContent = label;
+      figure.append(img, cap);
+      pool.append(figure);
+      if (reduced || frames.length < 2) continue;
+      let i = 0;
+      setInterval(() => {
+        i = (i + 1) % frames.length;
+        img.src = src(frames[i]);
+      }, ms);
+    }
+  </script>
+</body>
+</html>

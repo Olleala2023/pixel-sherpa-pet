@@ -11,11 +11,17 @@
 """
 import ctypes
 from ctypes import wintypes
+import math
 from pathlib import Path
 import random
 import sys
 import time
 import tkinter as tk
+
+try:
+    import winsound
+except ImportError:  # не Windows — просто без звука
+    winsound = None
 
 from build_sherpa_pack import H, W, draw_chibi_frame
 
@@ -23,6 +29,30 @@ TRANSPARENT_HEX = "#010203"
 STATE_FILE = Path(__file__).resolve().parent / "sherpa-state.txt"
 MUTEX_NAME = "Local\\SherpaChibiDesktopPetSingletonMutex"
 ERROR_ALREADY_EXISTS = 183
+
+# Звуки падения (собирает make_sounds.py)
+SOUNDS_DIR = Path(__file__).resolve().parent / "sounds"
+SND_LAND = SOUNDS_DIR / "sherpa_land.wav"
+SND_BOUNCE = SOUNDS_DIR / "sherpa_bounce.wav"
+
+# Падение: настоящее ускорение в px/с², скорость растёт до самого удара
+GRAVITY = 3000.0
+MAX_FALL_SPEED = 3000.0      # px/с, упирается только при очень высоких бросках
+RESTITUTION = [0.2, 0.12]    # доля скорости при 1-м и 2-м отскоке
+MAX_BOUNCE_PX = 14.0         # отскок не выше, с какой высоты ни урони
+MIN_BOUNCE_SPEED = 120.0     # px/с: медленнее — не отскакивает и молчит
+TICK_MS = 30
+FALL_TICK_MS = 16            # во время падения кадры чаще, чтобы было плавно
+
+
+def play_sound(path: Path):
+    """Играет WAV асинхронно; новый звук обрывает предыдущий. Без файла — молча."""
+    if winsound is None or not path.exists():
+        return
+    try:
+        winsound.PlaySound(str(path), winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+    except RuntimeError:
+        pass
 
 
 class LASTINPUTINFO(ctypes.Structure):
@@ -141,7 +171,11 @@ class SherpaDesktopPet:
         self.x = float(right - (W * self.scale) - 140)
         self.y = float(self.ground_y)
         self.vx = -2.0
-        self.vy = 0.0
+        self.vy = 0.0          # px/с, плюс — вниз
+        self.falling = False
+        self.bounces = 0
+        self.sound_on = True
+        self.last_tick = time.monotonic()
         # В базовом спрайте (flip_x=False) хвост слева, нос смотрит вправо.
         # Поэтому при движении влево (vx < 0) включаем отражение facing_left = True.
         self.facing_left = True
@@ -151,6 +185,13 @@ class SherpaDesktopPet:
         self.roaming = True
         self.frame = 0
         self.last_frame_time = time.monotonic()
+        self.eyes_closed = False
+        self.blink_until = 0.0
+        self.extra_blinks = 0
+        self.next_blink = time.monotonic() + random.uniform(1.4, 4.2)
+        self.tail_pose = False
+        self.flicks_left = 0
+        self.tail_next = time.monotonic() + random.uniform(0.4, 1.6)
         self.state_until = time.monotonic() + 4.0
         self.temp_override_until = 0.0
 
@@ -175,11 +216,13 @@ class SherpaDesktopPet:
         self.sprites.clear()
         for st in self.states:
             for flip in (False, True):
-                frames = [
-                    pil_to_tk_photo(draw_chibi_frame(st, f, flip_x=flip), self.scale)
-                    for f in range(4)
-                ]
-                self.sprites[(st, flip)] = frames
+                for frame in range(4):
+                    for blink in (False, True):
+                        for wag in (False, True):
+                            self.sprites[(st, flip, frame, blink, wag)] = pil_to_tk_photo(
+                                draw_chibi_frame(st, frame, flip_x=flip, blink=blink, wag=wag),
+                                self.scale,
+                            )
 
     def _build_menu(self):
         self.menu = tk.Menu(self.root, tearoff=0)
@@ -193,6 +236,7 @@ class SherpaDesktopPet:
         self.menu.add_command(label="Поза: Спит (z-z-z)", command=lambda: self.set_manual("sleep"))
         self.menu.add_separator()
         self.menu.add_command(label="Вкл/Выкл прогулку по панели", command=self.toggle_roaming)
+        self.menu.add_command(label="Вкл/Выкл звуки", command=self.toggle_sound)
         size_menu = tk.Menu(self.menu, tearoff=0)
         for s, label in ((2, "Мелкий (2x)"), (3, "Средний (3x)"), (4, "Крупный (4x)"), (5, "Очень крупный (5x)")):
             size_menu.add_command(label=label, command=lambda sc=s: self.change_scale(sc))
@@ -213,6 +257,9 @@ class SherpaDesktopPet:
             self.state = "idle"
             self._draw()
 
+    def toggle_sound(self):
+        self.sound_on = not self.sound_on
+
     def _clamp_position(self):
         min_x = float(self.work_left + 8)
         max_x = float(max(min_x, self.work_right - (W * self.scale) - 8))
@@ -231,12 +278,15 @@ class SherpaDesktopPet:
         self.work_right = right
         self.ground_y = bottom - (H * self.scale) + (2 * self.scale)
         self.y = float(self.ground_y)
+        self.falling = False
+        self.vy = 0.0
         self._clamp_position()
         self._update_geometry()
         self._draw()
 
     def on_press(self, event):
         self.dragging = True
+        self.falling = False  # поймали на лету
         self.drag_moved = False
         self.press_root_x = event.x_root
         self.press_root_y = event.y_root
@@ -275,6 +325,11 @@ class SherpaDesktopPet:
                 self.state = self.manual_state or "idle"
                 self.state_until = now + 3.0
                 self._draw()
+            else:
+                # отпустили в воздухе — падает с нуля, отскоки считаются заново
+                self.vy = 0.0
+                self.bounces = 0
+                self.falling = True
 
     def on_right_click(self, event):
         try:
@@ -296,14 +351,104 @@ class SherpaDesktopPet:
     def _update_geometry(self):
         self.root.geometry(f"{W * self.scale}x{H * self.scale}+{int(self.x)}+{int(self.y)}")
 
+    def _step_blink(self, now):
+        if self.state in ("sleep", "jump"):
+            return False
+        if self.eyes_closed:
+            if now < self.blink_until:
+                return False
+            self.eyes_closed = False
+            if self.extra_blinks > 0:
+                self.extra_blinks -= 1
+                self.next_blink = now + random.uniform(0.09, 0.2)
+            else:
+                roll = random.random()
+                if roll < 0.14:
+                    gap = random.uniform(0.55, 1.35)
+                elif roll < 0.84:
+                    gap = random.uniform(2.1, 5.6)
+                else:
+                    gap = random.uniform(6.2, 10.5)
+                self.next_blink = now + gap
+            return True
+        if now < self.next_blink:
+            return False
+        self.eyes_closed = True
+        self.blink_until = now + random.uniform(0.08, 0.17)
+        if self.extra_blinks == 0 and random.random() < 0.32:
+            self.extra_blinks = 1 if random.random() < 0.82 else 2
+        return True
+
+    def _step_tail(self, now):
+        if now < self.tail_next:
+            return False
+        if self.flicks_left > 0:
+            self.tail_pose = not self.tail_pose
+            self.flicks_left -= 1
+            if self.flicks_left == 0:
+                rest = random.uniform(2.4, 6.5) if self.state == "sleep" else random.uniform(0.55, 2.6)
+                self.tail_next = now + rest
+            else:
+                self.tail_next = now + random.uniform(0.11, 0.4)
+            return True
+        if self.state == "sleep":
+            if random.random() < 0.3:
+                self.tail_pose = not self.tail_pose
+                self.flicks_left = 1
+                self.tail_next = now + random.uniform(0.16, 0.4)
+            else:
+                self.tail_next = now + random.uniform(2.2, 6.0)
+            return self.flicks_left == 1
+        roll = random.random()
+        if roll < 0.22:
+            self.tail_next = now + random.uniform(0.7, 2.1)
+            return False
+        if roll < 0.58:
+            count = random.choice([2, 3, 3, 4, 5])
+            hold = random.uniform(0.12, 0.32)
+        else:
+            count = random.choice([1, 1, 2])
+            hold = random.uniform(0.4, 0.95)
+        self.tail_pose = not self.tail_pose
+        self.flicks_left = count - 1
+        self.tail_next = now + hold
+        return True
+
+    def _step_fall(self, dt, now):
+        """Шаг падения на dt секунд. Возвращает путь к звуку, если был удар о панель, иначе None."""
+        # сначала скорость, потом позиция: ускорение видно с первого кадра
+        self.vy = min(MAX_FALL_SPEED, self.vy + GRAVITY * dt)
+        self.y += self.vy * dt
+        if self.y < self.ground_y:
+            return None
+        self.y = float(self.ground_y)
+        impact = self.vy
+        if self.bounces == 0:
+            snd = SND_LAND
+            self.state = "jump"
+            self.state_until = now + 1.2
+            self.temp_override_until = now + 1.2
+        else:
+            snd = SND_BOUNCE if impact > MIN_BOUNCE_SPEED else None
+        if self.bounces < len(RESTITUTION) and impact > MIN_BOUNCE_SPEED:
+            v = min(impact * RESTITUTION[self.bounces], math.sqrt(2 * GRAVITY * MAX_BOUNCE_PX))
+            self.vy = -v
+            self.bounces += 1
+        else:
+            self.vy = 0.0
+            self.falling = False
+        return snd
+
     def _draw(self):
-        flip = self.facing_left and self.state in ("walk", "idle")
-        frames = self.sprites.get((self.state, flip)) or self.sprites[("idle", False)]
-        photo = frames[self.frame % len(frames)]
+        flip =self.facing_left and self.state in ("walk", "idle")
+        key = (self.state, flip, self.frame % 4, self.eyes_closed, self.tail_pose)
+        photo = self.sprites.get(key) or self.sprites[(self.state, flip, 0, False, False)]
         self.canvas.itemconfig(self.img_id, image=photo)
 
     def tick(self):
         now = time.monotonic()
+        dt = min(0.05, now - self.last_tick)  # окно подвисло — не проваливаемся сквозь панель
+        self.last_tick = now
 
         left, top, right, bottom = get_work_area()
         self.work_left = left
@@ -312,15 +457,12 @@ class SherpaDesktopPet:
         self.ground_y = bottom - (H * self.scale) + (2 * self.scale)
 
         if not self.dragging:
-            if self.y < self.ground_y:
-                self.vy = min(14.0, self.vy + 1.2)
-                self.y += self.vy
-                if self.y >= self.ground_y:
-                    self.y = float(self.ground_y)
-                    self.vy = 0.0
-                    self.state = "jump"
-                    self.state_until = now + 1.2
-                    self.temp_override_until = now + 1.2
+            if self.falling or self.y < self.ground_y:
+                if not self.falling:  # например, панель задач сдвинулась
+                    self.falling, self.vy, self.bounces = True, 0.0, 0
+                snd = self._step_fall(dt, now)
+                if snd and self.sound_on:
+                    play_sound(snd)
                 self._clamp_position()
                 self._update_geometry()
             else:
@@ -369,15 +511,23 @@ class SherpaDesktopPet:
                         self.facing_left = True
                     self._update_geometry()
 
+        redraw = False
         if now - self.last_frame_time >= 0.22:
             self.frame = (self.frame + 1) % 4
             self.last_frame_time = now
+            redraw = True
+        if self._step_blink(now):
+            redraw = True
+        if self._step_tail(now):
+            redraw = True
+        if redraw:
             self._draw()
 
-        self.root.after(30, self.tick)
+        self.root.after(FALL_TICK_MS if self.falling else TICK_MS, self.tick)
 
     def run(self):
-        self.root.after(30, self.tick)
+        self.last_tick = time.monotonic()
+        self.root.after(TICK_MS, self.tick)
         self.root.mainloop()
 
 

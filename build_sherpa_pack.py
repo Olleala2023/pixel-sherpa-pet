@@ -51,10 +51,12 @@ def set_rows(g, ox, oy, rows):
                 pix(g, ox + x, oy + y, ch)
 
 
-def draw_chibi_frame(state: str, frame: int, flip_x: bool = False) -> Image.Image:
+def draw_chibi_frame(state: str, frame: int, flip_x: bool = False, blink=None, wag=None) -> Image.Image:
     g = make_grid(W, H)
-    wag = frame % 2 == 0
-    blink = state not in ("sleep", "jump") and frame == 3
+    if wag is None:
+        wag = frame % 2 == 0
+    if blink is None:
+        blink = state not in ("sleep", "jump") and frame == 3
     y_off = 0
     if state == "jump":
         y_off = [0, -2, -3, -1][frame % 4]
