@@ -23,7 +23,7 @@ DEFAULT_TOML = f'''# Настройки мозга Шерпы. Ключ OpenRout
 port = 8765
 model = "deepseek/deepseek-v4-flash"
 daily_limit_usd = 0.5
-max_answer_tokens = 400
+max_answer_tokens = 1000
 max_dialog_pairs = 6
 stt_idle_unload_s = 300
 brain_idle_exit_s = 3600
@@ -59,7 +59,7 @@ class Config:
     port: int = 8765
     model: str = "deepseek/deepseek-v4-flash"
     daily_limit_usd: float = 0.5
-    max_answer_tokens: int = 400
+    max_answer_tokens: int = 1000
     max_dialog_pairs: int = 6
     stt_idle_unload_s: float = 300
     brain_idle_exit_s: float = 3600

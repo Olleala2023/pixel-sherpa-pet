@@ -7,17 +7,29 @@ import os
 import secrets
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import date, datetime
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
+from . import llm as llm_mod
 from . import stt as stt_mod
 from .config import AUDIO_DIR, DB_PATH, Config
 from .db import Db
 
 log = logging.getLogger("brain.server")
 MAX_BODY = 4 * 1024 * 1024
+
+
+class AskIn(BaseModel):
+    session_id: str | None = None
+    question: str
+    transcript_raw: str | None = None
+    audio_id: str | None = None
+    audio_sec: float | None = None
+    stt_ms: int | None = None
+    source: str = "pet"
 
 
 class ApiError(Exception):
@@ -30,6 +42,7 @@ class Brain:
         self.cfg = cfg
         self.db = Db(DB_PATH)
         self.stt = stt_mod.Stt(cfg)
+        self.llm = llm_mod.Llm(cfg)
         self.stt_lock = asyncio.Lock()
         self.last_request = time.monotonic()
         self.should_exit = None  # колбэк из __main__: остановить uvicorn
@@ -116,5 +129,78 @@ def create_app(cfg: Config) -> FastAPI:
             "segments": r.segments,
             "method": r.method,
         }
+
+    @app.post("/ask")
+    async def ask(body: AskIn):
+        brain.touch()
+        question = body.question.strip()
+        if not question:
+            raise ApiError(400, "empty_question", "Вопрос пустой.")
+        session_id = body.session_id or secrets.token_hex(6)
+        audio_file = f"{body.audio_id}.wav" if body.audio_id and (AUDIO_DIR / f"{body.audio_id}.wav").exists() else None
+        base = dict(
+            session_id=session_id,
+            turn=brain.db.next_turn(session_id),
+            source=body.source,
+            audio_file=audio_file,
+            audio_sec=body.audio_sec,
+            transcript_raw=body.transcript_raw,
+            question=question,
+            stt_ms=body.stt_ms,
+            model=cfg.model,
+        )
+        spent = brain.db.cost_since(date.today().isoformat())
+        if spent >= cfg.daily_limit_usd:
+            brain.db.insert(**base, status="limit", error=f"потрачено ${spent:.4f} из ${cfg.daily_limit_usd}")
+            raise ApiError(
+                429, "daily_limit", f"Лимит на сегодня исчерпан: ${spent:.2f} из ${cfg.daily_limit_usd:.2f}."
+            )
+        history = brain.db.session_messages(session_id, cfg.max_dialog_pairs)
+        try:
+            a = await brain.llm.ask(question, history)
+        except llm_mod.NoApiKey:
+            brain.db.insert(**base, status="error", error="no_api_key")
+            raise ApiError(500, "no_api_key", "Нет ключа: задай переменную окружения OPENROUTER_API_KEY.")
+        except Exception as e:  # noqa: BLE001
+            log.exception("ошибка нейронки")
+            brain.db.insert(**base, status="error", error=f"{type(e).__name__}: {e}"[:500])
+            if type(e).__name__ == "OutputTokenLimitExceeded":
+                msg = f"Ответ не влез в {cfg.max_answer_tokens} токенов — спроси уже или подними max_answer_tokens."
+            else:
+                msg = f"Нейронка не ответила: {type(e).__name__}."
+            raise ApiError(502, "llm_failed", msg)
+        base.update(
+            answer=a.text,
+            model=a.model,
+            tokens_in=a.tokens_in,
+            tokens_out=a.tokens_out,
+            cost_usd=a.cost_usd,
+            llm_ms=a.llm_ms,
+            messages_json=a.messages_json,
+        )
+        brain.db.insert(**base, status="ok")
+        brain.touch()
+        return {
+            "session_id": session_id,
+            "turn": base["turn"],
+            "answer": a.text,
+            "model": a.model,
+            "tokens_in": a.tokens_in,
+            "tokens_out": a.tokens_out,
+            "cost_usd": a.cost_usd,
+            "llm_ms": a.llm_ms,
+        }
+
+    @app.get("/history")
+    async def history(limit: int = 50):
+        return brain.db.history(max(1, min(limit, 500)))
+
+    @app.get("/stats")
+    async def stats():
+        today = date.today()
+        t = brain.db.stats_since(today.isoformat())
+        t["limit_usd"] = cfg.daily_limit_usd
+        m = brain.db.stats_since(today.replace(day=1).isoformat())
+        return {"today": t, "month": m, "model": cfg.model}
 
     return app
