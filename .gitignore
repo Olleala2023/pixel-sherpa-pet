@@ -11,3 +11,4 @@ __pycache__/
 # мозг: база, аудио, лог
 brain/data/
 *.canvas.bak
+brain/config.toml
