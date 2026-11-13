@@ -43,6 +43,7 @@ MAX_BOUNCE_PX = 14.0         # отскок не выше, с какой выс�
 MIN_BOUNCE_SPEED = 120.0     # px/с: медленнее — не отскакивает и молчит
 TICK_MS = 30
 FALL_TICK_MS = 16            # во время падения кадры чаще, чтобы было плавно
+CLICK_DELAY_MS = 250         # одиночный клик ждёт: вдруг это первая половина двойного
 
 
 def play_sound(path: Path):
@@ -201,10 +202,18 @@ class SherpaDesktopPet:
         self.press_root_y = 0
         self.start_win_x = 0.0
         self.start_win_y = 0.0
+        self.click_job = None
+
+        # Голосовая справка (sherpa_voice.py): поза на время записи/ответа и открытые окна
+        self.voice_pose = None
+        self.voice_window = None
+        self.history_window = None
+        self.brain_client = None
 
         self.canvas.bind("<ButtonPress-1>", self.on_press)
         self.canvas.bind("<B1-Motion>", self.on_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
+        self.canvas.bind("<Double-Button-1>", self.on_double_click)
         self.canvas.bind("<Button-3>", self.on_right_click)
 
         self._build_menu()
@@ -234,6 +243,9 @@ class SherpaDesktopPet:
         self.menu.add_command(label="Поза: Думает", command=lambda: self.set_manual("think"))
         self.menu.add_command(label="Поза: Ура! (прыгает)", command=lambda: self.set_manual("jump"))
         self.menu.add_command(label="Поза: Спит (z-z-z)", command=lambda: self.set_manual("sleep"))
+        self.menu.add_separator()
+        self.menu.add_command(label="Спросить голосом… (двойной клик)", command=self.open_voice)
+        self.menu.add_command(label="История запросов…", command=self.open_history)
         self.menu.add_separator()
         self.menu.add_command(label="Вкл/Выкл прогулку по панели", command=self.toggle_roaming)
         self.menu.add_command(label="Вкл/Выкл звуки", command=self.toggle_sound)
@@ -314,11 +326,10 @@ class SherpaDesktopPet:
         self.dragging = False
         now = time.monotonic()
         if not self.drag_moved:
-            # Короткий клик — радуется или машет лапой (даже если выбрана ручная поза)
-            self.state = random.choice(["jump", "wave", "look"])
-            self.state_until = now + 3.0
-            self.temp_override_until = now + 3.0
-            self._draw()
+            # Короткий клик — реакция с задержкой: если придёт второй клик, это двойной (окно справки)
+            if self.click_job is not None:
+                self.root.after_cancel(self.click_job)
+            self.click_job = self.root.after(CLICK_DELAY_MS, self._click_reaction)
         else:
             if self.y >= self.ground_y:
                 self.y = float(self.ground_y)
@@ -330,6 +341,52 @@ class SherpaDesktopPet:
                 self.vy = 0.0
                 self.bounces = 0
                 self.falling = True
+
+    def _click_reaction(self):
+        """Одиночный клик — радуется или машет лапой (даже если выбрана ручная поза)."""
+        self.click_job = None
+        self.hold_pose(random.choice(["jump", "wave", "look"]), 3.0)
+
+    def hold_pose(self, st, seconds):
+        now = time.monotonic()
+        self.state = st
+        self.state_until = now + seconds
+        self.temp_override_until = now + seconds
+        self._draw()
+
+    def on_double_click(self, event):
+        # Второе нажатие двойного клика приходит сюда вместо on_press: отменяем отложенный одиночный
+        if self.click_job is not None:
+            self.root.after_cancel(self.click_job)
+            self.click_job = None
+        self.dragging = False
+        self.open_voice()
+
+    def _client(self):
+        from sherpa_voice import BrainClient
+
+        if self.brain_client is None:
+            self.brain_client = BrainClient()
+        return self.brain_client
+
+    def open_voice(self):
+        if self.voice_window is not None and self.voice_window.winfo_exists():
+            self.voice_window.deiconify()
+            self.voice_window.lift()
+            self.voice_window.focus_force()
+            return
+        from sherpa_voice_ui import VoiceWindow
+
+        self.voice_window = VoiceWindow(self, self._client())
+
+    def open_history(self):
+        if self.history_window is not None and self.history_window.winfo_exists():
+            self.history_window.lift()
+            self.history_window.load()
+            return
+        from sherpa_voice_ui import HistoryWindow
+
+        self.history_window = HistoryWindow(self, self._client())
 
     def on_right_click(self, event):
         try:
@@ -470,7 +527,9 @@ class SherpaDesktopPet:
                 ext = self._read_external_state()
                 idle_sec = get_idle_seconds()
 
-                if now < self.temp_override_until:
+                if self.voice_pose:  # слушает / думает над голосовым вопросом
+                    self.state = self.voice_pose
+                elif now < self.temp_override_until:
                     pass
                 elif ext:
                     self.state = ext

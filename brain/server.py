@@ -164,8 +164,13 @@ def create_app(cfg: Config) -> FastAPI:
         except Exception as e:  # noqa: BLE001
             log.exception("ошибка нейронки")
             brain.db.insert(**base, status="error", error=f"{type(e).__name__}: {e}"[:500])
-            if type(e).__name__ == "OutputTokenLimitExceeded":
+            name = type(e).__name__
+            if name == "OutputTokenLimitExceeded":
                 msg = f"Ответ не влез в {cfg.max_answer_tokens} токенов — спроси уже или подними max_answer_tokens."
+            elif "Connection" in name or "Timeout" in name:
+                msg = "Нет связи с OpenRouter — проверь интернет."
+            elif "401" in str(e) or "Unauthorized" in str(e):
+                msg = "OpenRouter не принял ключ — проверь OPENROUTER_API_KEY."
             else:
                 msg = f"Нейронка не ответила: {type(e).__name__}."
             raise ApiError(502, "llm_failed", msg)
