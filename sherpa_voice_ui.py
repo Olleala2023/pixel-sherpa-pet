@@ -234,18 +234,22 @@ class CardWindow(tk.Toplevel):
         self.body = tk.Frame(self.bgc, bg=C["card"])
         self.body.place(x=INSET, y=INSET - 2, relwidth=1, width=-2 * INSET, relheight=1, height=-2 * INSET + 2)
 
-        head = tk.Frame(self.body, bg=C["card"])
+        self.head = head = tk.Frame(self.body, bg=C["card"])
         head.pack(fill="x")
         self.avatar_lbl = tk.Label(head, image=avatar(pose), bg=C["card"], bd=0)
         self.avatar_lbl.pack(side="left")
-        txt = tk.Frame(head, bg=C["card"])
-        txt.pack(side="left", padx=(8, 0), fill="x", expand=True)
-        self.title_lbl = tk.Label(txt, text=title, bg=C["card"], fg=C["ink"], font=(UI_SB, 12), anchor="w")
-        self.title_lbl.pack(fill="x")
-        self.sub_lbl = tk.Label(txt, text=subtitle, bg=C["card"], fg=C["muted"], font=(UI, 9), anchor="w")
-        self.sub_lbl.pack(fill="x")
         self.head_btns = tk.Frame(head, bg=C["card"])
         self.head_btns.pack(side="right", anchor="n")
+        # width=1: текст не отбирает место у кнопок справа, длинный подзаголовок переносится на 2-ю строку
+        self.head_txt = txt = tk.Frame(head, bg=C["card"])
+        txt.pack(side="left", padx=(8, 0), fill="x", expand=True)
+        self.title_lbl = tk.Label(txt, text=title, bg=C["card"], fg=C["ink"], font=(UI_SB, 12), anchor="w",
+                                  width=1)
+        self.title_lbl.pack(fill="x")
+        self.sub_lbl = tk.Label(txt, text=subtitle, bg=C["card"], fg=C["muted"], font=(UI, 9), anchor="w",
+                                justify="left", width=1)
+        self.sub_lbl.pack(fill="x")
+        txt.bind("<Configure>", lambda e: self.sub_lbl.config(wraplength=max(60, e.width - 2)))
         IconButton(self.head_btns, I_CLOSE, size=28, bg=C["card"], fg=C["muted"], hover=C["hover"],
                    command=self.close, icon_size=9).pack(side="right")
         for wdg in (head, self.avatar_lbl, txt, self.title_lbl, self.sub_lbl):
@@ -353,19 +357,23 @@ class VoiceWindow(CardWindow):
         # --- переписка: появляется над строкой ввода после первого вопроса ---
         self.chat = Chat(self.body, self.WIDTH - 2 * INSET)
 
-        # --- строка ввода: микрофон, поле, отправить ---
+        # --- микрофон и «отправить» — в шапке, на свободном месте справа от имени ---
+        ctl = tk.Frame(self.head, bg=C["card"])
+        ctl.pack(side="right", padx=(0, 6), before=self.head_txt)
+        self.send = IconButton(ctl, I_SEND, size=36, command=self.ask, icon_size=12)
+        self.send.pack(side="right", padx=(6, 0))
+        self.mic = IconButton(ctl, I_MIC, size=46, ring=5, command=self.toggle_record, icon_size=16)
+        self.mic.pack(side="right")
+
+        # --- поле вопроса на всю ширину ---
         self.bar = tk.Frame(self.body, bg=C["card"])
         self.bar.pack(fill="x", pady=(8, 0))
-        self.mic = IconButton(self.bar, I_MIC, size=46, ring=6, command=self.toggle_record, icon_size=16)
-        self.mic.pack(side="left", padx=(0, 2))
-        self.send = IconButton(self.bar, I_SEND, size=36, command=self.ask, icon_size=12)
-        self.send.pack(side="right", padx=(6, 0))
         self.q_text = tk.Text(self.bar, height=2, wrap="word", font=(UI, 10), bg=C["white"], fg=C["ink"],
                               relief="flat", bd=0, highlightthickness=0, insertbackground=C["blue_dk"], undo=True)
         field = Panel(self.bar, C["white"], C["card"], r=14, outline=C["border"], inner=self.q_text, pad=8,
                       height=52)
         self.q_text.lift(field)
-        field.pack(side="left", fill="x", expand=True)
+        field.pack(fill="x")
         self.q_text.bind("<Return>", self._on_enter)
         self.q_text.bind("<FocusIn>", self._ph_off)
         self.q_text.bind("<FocusOut>", self._ph_on)
@@ -389,6 +397,10 @@ class VoiceWindow(CardWindow):
         self.mic.focus_set()
         self.set_subtitle("Бужу мозг…")
         self.worker.run(self.client.ensure_running, lambda _: self._ready(), self._on_error)
+
+    def set_subtitle(self, text, error=False):
+        super().set_subtitle(text, error)
+        self.fit()  # длинная ошибка в две строки — окно чуть выше
 
     # --- раскладка ---
     def _compact(self, on: bool) -> None:
@@ -497,7 +509,7 @@ class VoiceWindow(CardWindow):
             self.mic.redraw()
             return
         sec = self.rec.elapsed()
-        self.set_subtitle(f"Слушаю · {int(sec) // 60}:{int(sec) % 60:02d} из 1:00 · пробел — стоп")
+        self.set_subtitle(f"Слушаю · {int(sec) // 60}:{int(sec) % 60:02d} из 1:00")
         self.mic.pulse_phase = (sec / 1.4) % 1.0
         self.mic.redraw()
         if sec >= MAX_REC_S:
