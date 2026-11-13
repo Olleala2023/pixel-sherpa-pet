@@ -1,0 +1,232 @@
+{
+ "nodes": [
+  {
+   "id": "4051d5c7ae7005b6",
+   "type": "text",
+   "text": "**Как пользоваться**\n\nКартинки — окна как сейчас (14.11).\nЖёлтые карточки — пиши туда, что поправить на этом экране.\nМожно таскать картинки, ставить карточку прямо на место правки и тянуть стрелку к картинке.\nПотом напиши в чат «правки в канвасе» — прочитаю.",
+   "x": -380,
+   "y": 0,
+   "width": 330,
+   "height": 250,
+   "color": "5"
+  },
+  {
+   "id": "9fd0509fac76e122",
+   "type": "file",
+   "file": "docs/ui/1-empty.png",
+   "x": 0,
+   "y": 40,
+   "width": 400,
+   "height": 167
+  },
+  {
+   "id": "9a52427e3f8cb4be",
+   "type": "text",
+   "text": "**Пусто: только шапка и строка ввода**",
+   "x": 0,
+   "y": 0,
+   "width": 400,
+   "height": 40
+  },
+  {
+   "id": "6bffca918820bbe8",
+   "type": "text",
+   "text": "Что поправить:\n",
+   "x": 0,
+   "y": 227,
+   "width": 400,
+   "height": 110,
+   "color": "3"
+  },
+  {
+   "id": "6e3e925cac9af4b7",
+   "type": "file",
+   "file": "docs/ui/2-recording.png",
+   "x": 460,
+   "y": 40,
+   "width": 400,
+   "height": 167
+  },
+  {
+   "id": "0cad34f32ba4eb9d",
+   "type": "text",
+   "text": "**Идёт запись**",
+   "x": 460,
+   "y": 0,
+   "width": 400,
+   "height": 40
+  },
+  {
+   "id": "1abd1acbf5d370fa",
+   "type": "text",
+   "text": "Что поправить:\n",
+   "x": 460,
+   "y": 227,
+   "width": 400,
+   "height": 110,
+   "color": "3"
+  },
+  {
+   "id": "e3a3dbd90b3fad70",
+   "type": "file",
+   "file": "docs/ui/3-thinking.png",
+   "x": 920,
+   "y": 40,
+   "width": 400,
+   "height": 214
+  },
+  {
+   "id": "b17c02388cd40d58",
+   "type": "text",
+   "text": "**Первый вопрос, ждём ответ**",
+   "x": 920,
+   "y": 0,
+   "width": 400,
+   "height": 40
+  },
+  {
+   "id": "7b4795a3e1356616",
+   "type": "text",
+   "text": "Что поправить:\n",
+   "x": 920,
+   "y": 274,
+   "width": 400,
+   "height": 110,
+   "color": "3"
+  },
+  {
+   "id": "5eef3f1f5c382eb1",
+   "type": "file",
+   "file": "docs/ui/4-answer.png",
+   "x": 0,
+   "y": 460,
+   "width": 400,
+   "height": 524
+  },
+  {
+   "id": "aa585252e44e86d9",
+   "type": "text",
+   "text": "**Два вопроса и ответа**",
+   "x": 0,
+   "y": 420,
+   "width": 400,
+   "height": 40
+  },
+  {
+   "id": "5cb1c53f8168ff0f",
+   "type": "file",
+   "file": "docs/ui/5-history.png",
+   "x": 460,
+   "y": 460,
+   "width": 860,
+   "height": 470
+  },
+  {
+   "id": "4c6be20e1b91af1e",
+   "type": "text",
+   "text": "**История**",
+   "x": 460,
+   "y": 420,
+   "width": 860,
+   "height": 40
+  },
+  {
+   "id": "9fb6c1c1d158be86",
+   "type": "file",
+   "file": "docs/ui/6-detail.png",
+   "x": 1380,
+   "y": 460,
+   "width": 560,
+   "height": 460
+  },
+  {
+   "id": "5772156fa0afaed9",
+   "type": "text",
+   "text": "**Подробности запроса**",
+   "x": 1380,
+   "y": 420,
+   "width": 560,
+   "height": 40
+  },
+  {
+   "id": "bc48fc440a10b49b",
+   "type": "text",
+   "text": "Что поправить:\n",
+   "x": 0,
+   "y": 1004,
+   "width": 400,
+   "height": 110,
+   "color": "3"
+  },
+  {
+   "id": "32bba2cc37a0aef0",
+   "type": "text",
+   "text": "Что поправить:\n",
+   "x": 460,
+   "y": 950,
+   "width": 860,
+   "height": 110,
+   "color": "3"
+  },
+  {
+   "id": "18c21026784e847c",
+   "type": "text",
+   "text": "Что поправить:\n",
+   "x": 1380,
+   "y": 940,
+   "width": 560,
+   "height": 110,
+   "color": "3"
+  }
+ ],
+ "edges": [
+  {
+   "id": "96cd983d9f00f4bf",
+   "fromNode": "6bffca918820bbe8",
+   "fromSide": "top",
+   "toNode": "9fd0509fac76e122",
+   "toSide": "bottom",
+   "label": "правка"
+  },
+  {
+   "id": "51baf9570b239e6e",
+   "fromNode": "1abd1acbf5d370fa",
+   "fromSide": "top",
+   "toNode": "6e3e925cac9af4b7",
+   "toSide": "bottom",
+   "label": "правка"
+  },
+  {
+   "id": "9a8390f9de5ef824",
+   "fromNode": "7b4795a3e1356616",
+   "fromSide": "top",
+   "toNode": "e3a3dbd90b3fad70",
+   "toSide": "bottom",
+   "label": "правка"
+  },
+  {
+   "id": "fe09222fe8f6f1e1",
+   "fromNode": "bc48fc440a10b49b",
+   "fromSide": "top",
+   "toNode": "5eef3f1f5c382eb1",
+   "toSide": "bottom",
+   "label": "правка"
+  },
+  {
+   "id": "90d515ea2425fc75",
+   "fromNode": "32bba2cc37a0aef0",
+   "fromSide": "top",
+   "toNode": "5cb1c53f8168ff0f",
+   "toSide": "bottom",
+   "label": "правка"
+  },
+  {
+   "id": "60d421fdd2c5ff18",
+   "fromNode": "18c21026784e847c",
+   "fromSide": "top",
+   "toNode": "9fb6c1c1d158be86",
+   "toSide": "bottom",
+   "label": "правка"
+  }
+ ]
+}

@@ -1,12 +1,17 @@
 # -*- coding: utf-8 -*-
-"""Окна голосовой справки в стиле Шерпы: карточка без рамки со скруглёнными углами, палитра пса,
-иконки Segoe MDL2 Assets, ответы блоками как в чате. Логика записи и сети — в sherpa_voice.py."""
+"""Окна голосовой справки в стиле Шерпы: карточка без рамки, палитра пса, иконки Segoe MDL2 Assets.
+
+Tk рисует круги и скругления без сглаживания (лесенкой), поэтому все круглые формы здесь рисует Pillow
+в 4× и уменьшает — края получаются гладкими. Окно справки компактное: пока вопросов нет, видны только
+шапка и строка ввода; переписка появляется над ними и растёт по содержимому.
+Логика записи и сети — в sherpa_voice.py.
+"""
 from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
 
-from PIL import Image, ImageTk
+from PIL import Image, ImageDraw, ImageTk
 
 from build_sherpa_pack import H, W, draw_chibi_frame
 from sherpa_voice import MAX_REC_S, BrainClient, Recorder, _Worker, err_text
@@ -16,7 +21,7 @@ C = {
     "key": "#010203",  # прозрачный цвет окна (как у самого пса)
     "card": "#F6F9FC",
     "border": "#D3DFEA",
-    "chat": "#ECF2F8",
+    "chat": "#E9F0F7",
     "ink": "#1C2836",
     "muted": "#607089",
     "soft": "#9AABBE",
@@ -35,20 +40,95 @@ ICONS = "Segoe MDL2 Assets"
 I_MIC, I_STOP, I_SEND, I_COPY, I_CLOSE, I_NEW, I_REFRESH, I_HISTORY = (
     "", "", "", "", "", "", "", "",
 )
-RADIUS = 18
-INSET = 14
+RADIUS = 16
+INSET = 12
+SS = 4  # во сколько раз крупнее рисуем перед уменьшением (сглаживание)
 
 
-def rounded_rect(cv: tk.Canvas, x1, y1, x2, y2, r, **kw):
-    pts = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2, x2 - r, y2,
-           x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
-    return cv.create_polygon(pts, smooth=True, **kw)
+def _rgb(h: str) -> tuple[int, int, int]:
+    return int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)
+
+
+def _mix(a: str, b: str, t: float) -> tuple[int, int, int]:
+    ra, rb = _rgb(a), _rgb(b)
+    return tuple(round(x + (y - x) * t) for x, y in zip(ra, rb))
+
+
+def _shrink(big: Image.Image, size: tuple[int, int]) -> Image.Image:
+    """Уменьшение RGBA с предумножением альфы: края не темнеют."""
+    return big.convert("RGBa").resize(size, Image.LANCZOS).convert("RGBA")
+
+
+def round_image(w, h, r, fill, bg, outline=None, tail=None) -> ImageTk.PhotoImage:
+    """Сглаженный скруглённый прямоугольник на фоне bg. tail='br'/'bl' — один угол почти острый (пузырь)."""
+    big = Image.new("RGBA", (w * SS, h * SS), (0, 0, 0, 0))
+    d = ImageDraw.Draw(big)
+    box = (0, 0, w * SS - 1, h * SS - 1)
+    if outline:
+        d.rounded_rectangle(box, r * SS, fill=outline)
+        box = (SS, SS, w * SS - 1 - SS, h * SS - 1 - SS)
+    d.rounded_rectangle(box, r * SS, fill=fill)
+    if tail:
+        x1 = box[0] if tail == "bl" else (box[0] + box[2]) // 2
+        x2 = (box[0] + box[2]) // 2 if tail == "bl" else box[2]
+        d.rounded_rectangle((x1, (box[1] + box[3]) // 2, x2, box[3]), 4 * SS, fill=fill)
+    base = Image.new("RGBA", (w, h), _rgb(bg) + (255,))
+    return ImageTk.PhotoImage(Image.alpha_composite(base, _shrink(big, (w, h))).convert("RGB"))
+
+
+def _corners(r, fill, outline, bg, keyed):
+    """Четыре угла панели (r+1)×(r+1). keyed=True — снаружи прозрачный цвет окна, край без полутонов."""
+    s = 2 * r + 2
+    big = Image.new("RGBA", (s * SS, s * SS), (0, 0, 0, 0))
+    d = ImageDraw.Draw(big)
+    box = (0, 0, s * SS - 1, s * SS - 1)
+    if outline:
+        d.rounded_rectangle(box, r * SS, fill=outline)
+        box = (SS, SS, s * SS - 1 - SS, s * SS - 1 - SS)
+    d.rounded_rectangle(box, (r - 1 if outline else r) * SS, fill=fill)
+    sm = _shrink(big, (s, s))
+    if keyed:
+        a = sm.getchannel("A").point(lambda v: 255 if v >= 110 else 0)
+        img = Image.new("RGB", (s, s), _rgb(bg))
+        img.paste(sm.convert("RGB"), mask=a)
+    else:
+        img = Image.alpha_composite(Image.new("RGBA", (s, s), _rgb(bg) + (255,)), sm).convert("RGB")
+    q = r + 1
+    return [ImageTk.PhotoImage(img.crop(b)) for b in ((0, 0, q, q), (q, 0, s, q), (0, q, q, s), (q, q, s, s))]
+
+
+class Panel(tk.Canvas):
+    """Скруглённая панель с гладкими углами; inner — виджет, который лежит внутри с отступом pad."""
+
+    def __init__(self, parent, fill, bg, r=14, outline=None, inner=None, pad=0, keyed=False, **kw):
+        super().__init__(parent, bg=bg, highlightthickness=0, bd=0, **kw)
+        self.fill, self.outline, self.r, self.pad, self.inner = fill, outline, r, pad, inner
+        self.imgs = _corners(r, fill, outline, bg, keyed)
+        self.bind("<Configure>", self._draw)
+
+    def _draw(self, e):
+        w, h, q = e.width, e.height, self.r + 1
+        self.delete("panel")
+        edge = self.outline or self.fill
+        self.create_rectangle(0, 0, w, h, fill=edge, width=0, tags="panel")
+        self.create_rectangle(1 if self.outline else 0, 1 if self.outline else 0,
+                              w - 1 if self.outline else w, h - 1 if self.outline else h,
+                              fill=self.fill, width=0, tags="panel")
+        for img, (x, y) in zip(self.imgs, ((0, 0), (w - q, 0), (0, h - q), (w - q, h - q))):
+            self.create_image(x, y, image=img, anchor="nw", tags="panel")
+        self.tag_lower("panel")
+        if self.inner is not None:
+            self.delete("inner")
+            p = self.pad
+            self.create_window(p, p, window=self.inner, anchor="nw", width=w - 2 * p, height=h - 2 * p,
+                               tags="inner")
 
 
 _avatar_cache: dict[str, ImageTk.PhotoImage] = {}
 
 
 def avatar(state: str, scale: int = 2) -> ImageTk.PhotoImage:
+    """Аватар — сам пёс, он пиксельный нарочно (пиксель-арт), увеличение без сглаживания."""
     key = f"{state}:{scale}"
     if key not in _avatar_cache:
         img = draw_chibi_frame(state, 0).resize((W * scale, H * scale), Image.NEAREST)
@@ -57,18 +137,21 @@ def avatar(state: str, scale: int = 2) -> ImageTk.PhotoImage:
 
 
 class IconButton(tk.Canvas):
-    """Круглая кнопка с иконкой; ring — место под пульсирующее кольцо вокруг."""
+    """Круглая кнопка с иконкой; ring — место под пульсирующее кольцо вокруг (запись)."""
+
+    STEPS = 24
 
     def __init__(self, parent, icon, size=40, bg=C["blue"], fg=C["white"], hover=C["blue_dk"],
                  parent_bg=C["card"], command=None, ring=0, icon_size=None):
         d = size + 2 * ring
         super().__init__(parent, width=d, height=d, bg=parent_bg, highlightthickness=0, bd=0, cursor="hand2")
-        self.size, self.ring, self.command = size, ring, command
+        self.size, self.ring, self.command, self.parent_bg = size, ring, command, parent_bg
         self.colors = {"bg": bg, "fg": fg, "hover": hover}
         self.enabled, self.hovered = True, False
         self.icon_size = icon_size or max(10, size // 3)
         self.icon = icon
         self.pulse_phase: float | None = None
+        self._imgs: dict = {}
         self.bind("<Enter>", lambda e: self._hover(True))
         self.bind("<Leave>", lambda e: self._hover(False))
         self.bind("<ButtonRelease-1>", self._click)
@@ -95,64 +178,75 @@ class IconButton(tk.Canvas):
         if self.enabled and self.command and 0 <= e.x <= self.winfo_width() and 0 <= e.y <= self.winfo_height():
             self.command()
 
+    def _render(self, bg, step):
+        d = self.size + 2 * self.ring
+        big = Image.new("RGB", (d * SS, d * SS), _rgb(self.parent_bg))
+        dr = ImageDraw.Draw(big)
+        c = d * SS / 2
+        if step is not None and self.ring:
+            for k in (0.0, 0.5):
+                p = (step / self.STEPS + k) % 1.0
+                rr = (self.size / 2 + p * self.ring) * SS
+                dr.ellipse((c - rr, c - rr, c + rr, c + rr), outline=_mix(C["red"], self.parent_bg, p), width=2 * SS)
+        r = self.size / 2 * SS
+        dr.ellipse((c - r, c - r, c + r, c + r), fill=_rgb(bg))
+        return ImageTk.PhotoImage(big.resize((d, d), Image.LANCZOS))
+
     def redraw(self):
         self.delete("all")
-        r0, s = self.ring, self.size
-        if self.pulse_phase is not None and r0:
-            for k in (0, 0.5):
-                ph = (self.pulse_phase + k) % 1.0
-                rr = s / 2 + ph * r0
-                c = s / 2 + r0
-                col = C["red"] if ph < 0.35 else ("#EE8A8D" if ph < 0.7 else "#F6C4C5")
-                self.create_oval(c - rr, c - rr, c + rr, c + rr, outline=col, width=2)
         bg = self.colors["hover"] if (self.hovered and self.enabled) else self.colors["bg"]
         if not self.enabled:
             bg = C["border"]
-        self.create_oval(r0, r0, r0 + s, r0 + s, fill=bg, outline=bg)
-        self.create_text(r0 + s / 2, r0 + s / 2 + 1, text=self.icon, font=(ICONS, self.icon_size),
+        step = None if self.pulse_phase is None else int(self.pulse_phase * self.STEPS) % self.STEPS
+        key = (bg, step)
+        if key not in self._imgs:
+            self._imgs[key] = self._render(bg, step)
+        c = self.size / 2 + self.ring
+        self.create_image(0, 0, image=self._imgs[key], anchor="nw")
+        self.create_text(c, c + 1, text=self.icon, font=(ICONS, self.icon_size),
                          fill=self.colors["fg"] if self.enabled else C["white"])
 
 
 class LinkButton(tk.Label):
     def __init__(self, parent, text, command, icon=None, bg=C["card"]):
         super().__init__(parent, text=(f"{icon}  " if icon else "") + text, bg=bg, fg=C["blue_dk"],
-                         font=(UI, 9), cursor="hand2", padx=6, pady=3)
+                         font=(UI, 9), cursor="hand2", padx=6, pady=2)
         self.bind("<Button-1>", lambda e: command())
         self.bind("<Enter>", lambda e: self.config(bg=C["hover"]))
         self.bind("<Leave>", lambda e: self.config(bg=bg))
 
 
 class CardWindow(tk.Toplevel):
-    """Окно-карточка без системной рамки: скруглённые углы, шапка с аватаром, перетаскивание за шапку."""
+    """Окно-карточка без системной рамки: гладкие скруглённые углы, шапка с аватаром, перетаскивание за шапку."""
 
     def __init__(self, master, pet, w, h, title, subtitle="", pose="idle"):
         super().__init__(master)
         self.pet = pet
+        self.win_w = w
         self.overrideredirect(True)
         self.attributes("-topmost", True)
         self.configure(bg=C["key"])
         self.wm_attributes("-transparentcolor", C["key"])
         self._place(w, h)
 
-        self.bgc = tk.Canvas(self, bg=C["key"], highlightthickness=0, bd=0)
+        self.bgc = Panel(self, C["card"], C["key"], r=RADIUS, outline=C["border"], keyed=True)
         self.bgc.pack(fill="both", expand=True)
-        self.bgc.bind("<Configure>", self._draw_card)
         self.body = tk.Frame(self.bgc, bg=C["card"])
-        self.body.place(x=INSET, y=INSET - 4, relwidth=1, width=-2 * INSET, relheight=1, height=-2 * INSET + 6)
+        self.body.place(x=INSET, y=INSET - 2, relwidth=1, width=-2 * INSET, relheight=1, height=-2 * INSET + 2)
 
         head = tk.Frame(self.body, bg=C["card"])
-        head.pack(fill="x", pady=(0, 8))
+        head.pack(fill="x")
         self.avatar_lbl = tk.Label(head, image=avatar(pose), bg=C["card"], bd=0)
         self.avatar_lbl.pack(side="left")
         txt = tk.Frame(head, bg=C["card"])
-        txt.pack(side="left", padx=(10, 0), fill="x", expand=True)
-        self.title_lbl = tk.Label(txt, text=title, bg=C["card"], fg=C["ink"], font=(UI_SB, 13), anchor="w")
+        txt.pack(side="left", padx=(8, 0), fill="x", expand=True)
+        self.title_lbl = tk.Label(txt, text=title, bg=C["card"], fg=C["ink"], font=(UI_SB, 12), anchor="w")
         self.title_lbl.pack(fill="x")
         self.sub_lbl = tk.Label(txt, text=subtitle, bg=C["card"], fg=C["muted"], font=(UI, 9), anchor="w")
         self.sub_lbl.pack(fill="x")
         self.head_btns = tk.Frame(head, bg=C["card"])
         self.head_btns.pack(side="right", anchor="n")
-        IconButton(self.head_btns, I_CLOSE, size=30, bg=C["card"], fg=C["muted"], hover=C["hover"],
+        IconButton(self.head_btns, I_CLOSE, size=28, bg=C["card"], fg=C["muted"], hover=C["hover"],
                    command=self.close, icon_size=9).pack(side="right")
         for wdg in (head, self.avatar_lbl, txt, self.title_lbl, self.sub_lbl):
             wdg.bind("<ButtonPress-1>", self._drag_start)
@@ -166,15 +260,25 @@ class CardWindow(tk.Toplevel):
         y = int(pet.y - h - 8)
         x = max(pet.work_left + 8, min(x, pet.work_right - w - 8))
         y = max(pet.work_top + 8, y)
+        self._bottom = y + h
         self.geometry(f"{w}x{h}+{x}+{y}")
 
-    def _draw_card(self, e):
-        self.bgc.delete("card")
-        rounded_rect(self.bgc, 1, 1, e.width - 2, e.height - 2, RADIUS, fill=C["border"], outline="", tags="card")
-        rounded_rect(self.bgc, 2, 2, e.width - 3, e.height - 3, RADIUS - 1, fill=C["card"], outline="", tags="card")
+    def fit(self, max_h: int | None = None) -> None:
+        """Высота окна по содержимому; низ окна остаётся на месте (окно растёт вверх от пса)."""
+        self.update_idletasks()
+        h = self.body.winfo_reqheight() + 2 * INSET - 2
+        if max_h:
+            h = min(h, max_h)
+        if self.winfo_ismapped():
+            x, bottom = self.winfo_rootx(), self.winfo_rooty() + self.winfo_height()
+        else:
+            g = self.geometry().replace("x", "+").split("+")
+            x, bottom = int(g[2]), self._bottom
+        y = max(self.pet.work_top + 8, bottom - h)
+        self.geometry(f"{self.win_w}x{h}+{x}+{y}")
 
     def _drag_start(self, e):
-        self._dx, self._dy = e.x_root - self.winfo_x(), e.y_root - self.winfo_y()
+        self._dx, self._dy = e.x_root - self.winfo_rootx(), e.y_root - self.winfo_rooty()
 
     def _drag_move(self, e):
         self.geometry(f"+{e.x_root - self._dx}+{e.y_root - self._dy}")
@@ -189,11 +293,51 @@ class CardWindow(tk.Toplevel):
         self.destroy()
 
 
+class Chat(tk.Canvas):
+    """Переписка пузырями: вопрос справа голубым, ответ слева. Пузыри гладкие (Pillow), без рамок вокруг."""
+
+    PADX, PADY, GAP, R = 12, 8, 8, 14
+
+    def __init__(self, parent, width):
+        super().__init__(parent, bg=C["card"], highlightthickness=0, bd=0, width=width, height=1,
+                         yscrollincrement=12)
+        self.w = width
+        self.used = 0
+        self.imgs: list = []
+        self.bind("<MouseWheel>", lambda e: self.yview_scroll(-1 if e.delta > 0 else 1, "units"))
+
+    def clear(self):
+        self.delete("all")
+        self.imgs.clear()
+        self.used = 0
+
+    def add(self, who: str, text: str) -> int:
+        """Добавляет пузырь, возвращает y его верха."""
+        you = who == "you"
+        maxw = int(self.w * (0.78 if you else 0.9))
+        tid = self.create_text(0, 0, text=text, width=maxw - 2 * self.PADX, anchor="nw", font=(UI, 10),
+                               fill=C["white"] if you else C["ink"])
+        x1, y1, x2, y2 = self.bbox(tid)
+        bw, bh = (x2 - x1) + 2 * self.PADX, (y2 - y1) + 2 * self.PADY
+        y = self.used + (self.GAP if self.used else 0)
+        bx = self.w - bw if you else 0
+        img = round_image(bw, bh, self.R, C["blue"] if you else C["chat"], C["card"], tail="br" if you else "bl")
+        self.imgs.append(img)
+        self.create_image(bx, y, image=img, anchor="nw")
+        self.coords(tid, bx + self.PADX, y + self.PADY)
+        self.tag_raise(tid)
+        self.used = y + bh
+        self.configure(scrollregion=(0, 0, self.w, self.used))
+        return y
+
+
 class VoiceWindow(CardWindow):
     PLACEHOLDER = "Скажи или напиши вопрос…"
+    WIDTH = 400
+    MAX_CHAT = 360
 
     def __init__(self, pet, client: BrainClient):
-        super().__init__(pet.root, pet, 410, 560, "Шерпа", "Готов слушать")
+        super().__init__(pet.root, pet, self.WIDTH, 170, "Шерпа", "Готов слушать")
         self.client = client
         self.rec = Recorder()
         self.worker = _Worker(self)
@@ -203,51 +347,42 @@ class VoiceWindow(CardWindow):
         self.busy = False
         self.has_messages = False
 
-        IconButton(self.head_btns, I_HISTORY, size=30, bg=C["card"], fg=C["muted"], hover=C["hover"],
+        IconButton(self.head_btns, I_HISTORY, size=28, bg=C["card"], fg=C["muted"], hover=C["hover"],
                    command=pet.open_history, icon_size=10).pack(side="right", padx=(0, 2))
 
-        # --- переписка ---
-        chat_cv = tk.Canvas(self.body, bg=C["card"], highlightthickness=0, bd=0)
-        chat_cv.pack(fill="both", expand=True)
-        self.a_text = tk.Text(chat_cv, wrap="word", font=(UI, 10), bg=C["chat"], fg=C["ink"], relief="flat",
-                              bd=0, padx=12, pady=12, cursor="arrow", highlightthickness=0, spacing2=2)
-        chat_cv.bind("<Configure>", lambda e: self._round_box(chat_cv, self.a_text, e, C["chat"], 14, 6))
-        self.a_text.tag_configure("you", background=C["blue"], foreground=C["white"], lmargin1=70, lmargin2=70,
-                                  rmargin=4, spacing1=8, spacing3=8, font=(UI, 10))
-        self.a_text.tag_configure("dog", background=C["white"], foreground=C["ink"], lmargin1=4, lmargin2=4,
-                                  rmargin=44, spacing1=8, spacing3=8, font=(UI, 10))
-        self.a_text.tag_configure("gap", font=(UI, 4))
-        self.a_text.tag_configure("hint1", foreground=C["ink"], justify="center", spacing1=120, font=(UI_SB, 11))
-        self.a_text.tag_configure("hint", foreground=C["muted"], justify="center", spacing1=4, font=(UI, 10))
-        self.a_text.tag_configure("hint3", foreground=C["soft"], justify="center", spacing1=18, font=(UI, 8))
-        self._show_hint("Спроси что угодно голосом")
+        # --- переписка: появляется над строкой ввода после первого вопроса ---
+        self.chat = Chat(self.body, self.WIDTH - 2 * INSET)
 
         # --- строка ввода: микрофон, поле, отправить ---
-        bar = tk.Frame(self.body, bg=C["card"])
-        bar.pack(fill="x", pady=(10, 0))
-        self.mic = IconButton(bar, I_MIC, size=48, ring=8, command=self.toggle_record, icon_size=17)
-        self.mic.pack(side="left")
-        self.send = IconButton(bar, I_SEND, size=38, command=self.ask, icon_size=13)
+        self.bar = tk.Frame(self.body, bg=C["card"])
+        self.bar.pack(fill="x", pady=(8, 0))
+        self.mic = IconButton(self.bar, I_MIC, size=46, ring=6, command=self.toggle_record, icon_size=16)
+        self.mic.pack(side="left", padx=(0, 2))
+        self.send = IconButton(self.bar, I_SEND, size=36, command=self.ask, icon_size=12)
         self.send.pack(side="right", padx=(6, 0))
-        field_cv = tk.Canvas(bar, bg=C["card"], highlightthickness=0, bd=0, height=56)
-        field_cv.pack(side="left", fill="x", expand=True, padx=(4, 0))
-        self.q_text = tk.Text(field_cv, height=2, wrap="word", font=(UI, 10), bg=C["white"], fg=C["ink"],
+        self.q_text = tk.Text(self.bar, height=2, wrap="word", font=(UI, 10), bg=C["white"], fg=C["ink"],
                               relief="flat", bd=0, highlightthickness=0, insertbackground=C["blue_dk"], undo=True)
-        field_cv.bind("<Configure>", lambda e: self._round_box(field_cv, self.q_text, e, C["white"], 14, 9,
-                                                               outline=C["border"]))
+        field = Panel(self.bar, C["white"], C["card"], r=14, outline=C["border"], inner=self.q_text, pad=8,
+                      height=52)
+        self.q_text.lift(field)
+        field.pack(side="left", fill="x", expand=True)
         self.q_text.bind("<Return>", self._on_enter)
         self.q_text.bind("<FocusIn>", self._ph_off)
         self.q_text.bind("<FocusOut>", self._ph_on)
         self.q_text.bind("<Button-1>", lambda e: self.focus_force())
         self._ph_on()
 
-        # --- низ: действия и служебная строка ---
-        foot = tk.Frame(self.body, bg=C["card"])
-        foot.pack(fill="x", pady=(8, 0))
-        LinkButton(foot, "Копировать", self.copy, icon=None).pack(side="left")
-        LinkButton(foot, "Новая тема", self.new_topic).pack(side="left")
-        self.status = tk.Label(foot, text="", bg=C["card"], fg=C["soft"], font=(UI, 8), anchor="e")
+        # --- низ: подсказка (пока пусто) или действия и цифры (после ответа) ---
+        self.foot = tk.Frame(self.body, bg=C["card"])
+        self.foot.pack(fill="x", pady=(4, 0))
+        self.hint = tk.Label(self.foot, text="пробел — запись · Enter — отправить · Esc — закрыть",
+                             bg=C["card"], fg=C["soft"], font=(UI, 8), anchor="w")
+        self.links = tk.Frame(self.foot, bg=C["card"])
+        LinkButton(self.links, "Копировать", self.copy).pack(side="left")
+        LinkButton(self.links, "Новая тема", self.new_topic).pack(side="left")
+        self.status = tk.Label(self.foot, text="", bg=C["card"], fg=C["soft"], font=(UI, 8), anchor="e")
         self.status.pack(side="right")
+        self._compact(True)
 
         self.bind("<space>", self._on_space)
         self.focus_force()
@@ -255,26 +390,24 @@ class VoiceWindow(CardWindow):
         self.set_subtitle("Бужу мозг…")
         self.worker.run(self.client.ensure_running, lambda _: self._ready(), self._on_error)
 
-    # --- оформление ---
-    def _show_hint(self, title):
-        self.a_text.config(state="normal")
-        self.a_text.delete("1.0", "end")
-        self.a_text.insert("end", title + "\n", "hint1")
-        self.a_text.insert("end", "Отвечу коротко, как справка\n", "hint")
-        self.a_text.insert("end", "микрофон или пробел — начать и остановить запись", "hint3")
-        self.a_text.config(state="disabled")
-
-    @staticmethod
-    def _round_box(cv, inner, e, fill, r, pad, outline=None):
-        cv.delete("box")
-        if outline:
-            rounded_rect(cv, 0, 0, e.width - 1, e.height - 1, r, fill=outline, outline="", tags="box")
-            rounded_rect(cv, 1, 1, e.width - 2, e.height - 2, r - 1, fill=fill, outline="", tags="box")
+    # --- раскладка ---
+    def _compact(self, on: bool) -> None:
+        """on=True — только шапка и строка ввода; False — с перепиской над строкой ввода."""
+        if on:
+            self.chat.pack_forget()
+            self.links.pack_forget()
+            self.hint.pack(side="left", padx=(4, 0))
+            self.chat.configure(height=1)
         else:
-            rounded_rect(cv, 0, 0, e.width - 1, e.height - 1, r, fill=fill, outline="", tags="box")
-        cv.delete("inner")
-        cv.create_window(pad, pad, window=inner, anchor="nw", width=e.width - 2 * pad, height=e.height - 2 * pad,
-                         tags="inner")
+            self.hint.pack_forget()
+            self.links.pack(side="left")
+            if not self.chat.winfo_manager():
+                self.chat.pack(fill="x", pady=(10, 0), before=self.bar)
+        self.fit()
+
+    def _grow_chat(self) -> None:
+        self.chat.configure(height=min(self.chat.used, self.MAX_CHAT))
+        self.fit()
 
     def _ph_on(self, _e=None):
         if not self.q_text.get("1.0", "end").strip():
@@ -305,7 +438,7 @@ class VoiceWindow(CardWindow):
             self.set_subtitle("Готов слушать")
 
     def set_status(self, text: str, error: bool = False) -> None:
-        """Совместимость: ошибки — в подзаголовок, служебные цифры — в нижнюю строку."""
+        """Ошибки — в подзаголовок, служебные цифры — в нижнюю строку."""
         if error:
             self.set_subtitle(text, True)
         else:
@@ -317,15 +450,13 @@ class VoiceWindow(CardWindow):
         self.mic.set_enabled(not busy)
 
     def append(self, who: str, text: str) -> None:
-        self.a_text.config(state="normal")
         if not self.has_messages:
-            self.a_text.delete("1.0", "end")
             self.has_messages = True
-        else:
-            self.a_text.insert("end", "\n", "gap")
-        self.a_text.insert("end", text.strip() + "\n", "you" if who == "you" else "dog")
-        self.a_text.config(state="disabled")
-        self.a_text.see("end")
+            self._compact(False)
+        top = self.chat.add(who, text.strip())
+        self._grow_chat()
+        # ответ читаем с начала: прокручиваем к верху нового пузыря, вопрос — просто в конец
+        self.chat.yview_moveto(top / max(1, self.chat.used) if who != "you" else 1.0)
 
     def _on_space(self, e):
         if e.widget is self.q_text:
@@ -441,9 +572,10 @@ class VoiceWindow(CardWindow):
 
     def new_topic(self) -> None:
         self.session_id, self.last_answer, self.has_messages = None, "", False
-        self._show_hint("Новая тема — спрашивай")
-        self.set_subtitle("Готов слушать")
+        self.chat.clear()
         self.status.config(text="")
+        self._compact(True)
+        self.set_subtitle("Новая тема — спрашивай")
 
     def ask_more(self) -> None:
         self._set_question("")
@@ -479,7 +611,7 @@ def _tree_style(root) -> str:
 
 
 class HistoryWindow(CardWindow):
-    COLS = (("time", "Время", 110), ("question", "Вопрос", 250), ("answer", "Ответ", 280),
+    COLS = (("time", "Время", 110), ("question", "Вопрос", 250), ("answer", "Ответ", 300),
             ("tokens", "Токены", 80), ("cost", "$", 80))
 
     def __init__(self, pet, client: BrainClient):
@@ -487,19 +619,18 @@ class HistoryWindow(CardWindow):
         self.client = client
         self.worker = _Worker(self)
         self.rows: dict[str, dict] = {}
-        IconButton(self.head_btns, I_REFRESH, size=30, bg=C["card"], fg=C["muted"], hover=C["hover"],
+        IconButton(self.head_btns, I_REFRESH, size=28, bg=C["card"], fg=C["muted"], hover=C["hover"],
                    command=self.load, icon_size=10).pack(side="right", padx=(0, 2))
 
         self.cards = tk.Frame(self.body, bg=C["card"])
-        self.cards.pack(fill="x", pady=(0, 10))
+        self.cards.pack(fill="x", pady=(8, 8))
         self.today = self._stat_card("Сегодня")
         self.month = self._stat_card("Месяц")
 
-        box = tk.Canvas(self.body, bg=C["card"], highlightthickness=0, bd=0)
+        inner = tk.Frame(self.body, bg=C["white"])
+        box = Panel(self.body, C["white"], C["card"], r=12, outline=C["border"], inner=inner, pad=6)
+        inner.lift(box)
         box.pack(fill="both", expand=True)
-        inner = tk.Frame(box, bg=C["white"])
-        box.bind("<Configure>", lambda e: VoiceWindow._round_box(box, inner, e, C["white"], 14, 8,
-                                                                 outline=C["border"]))
         style = _tree_style(self)
         self.tree = ttk.Treeview(inner, columns=[c[0] for c in self.COLS], show="headings", style=style)
         for key, title, width in self.COLS:
@@ -513,22 +644,22 @@ class HistoryWindow(CardWindow):
         self.tree.pack(side="left", fill="both", expand=True)
         self.tree.bind("<Double-1>", self.show_row)
         tk.Label(self.body, text="Двойной клик по строке — полный ответ", bg=C["card"], fg=C["soft"],
-                 font=(UI, 8), anchor="w").pack(fill="x", pady=(6, 0))
+                 font=(UI, 8), anchor="w").pack(fill="x", pady=(4, 0))
         self.load()
 
     def _stat_card(self, title):
-        cv = tk.Canvas(self.cards, bg=C["card"], highlightthickness=0, bd=0, height=64)
-        cv.pack(side="left", fill="x", expand=True, padx=(0, 10) if title == "Сегодня" else 0)
+        cv = Panel(self.cards, C["chat"], C["card"], r=12, height=58)
+        cv.pack(side="left", fill="x", expand=True, padx=(0, 8) if title == "Сегодня" else 0)
         lab = {}
 
         def draw(e):
-            cv.delete("all")
-            rounded_rect(cv, 0, 0, e.width - 1, e.height - 1, 14, fill=C["chat"], outline="")
-            cv.create_text(16, 18, text=title.upper(), anchor="w", fill=C["muted"], font=(UI_SB, 8))
-            lab["big"] = cv.create_text(16, 42, text=lab.get("big_t", "—"), anchor="w", fill=C["ink"],
-                                        font=(UI_SB, 14))
-            lab["small"] = cv.create_text(e.width - 16, 42, text=lab.get("small_t", ""), anchor="e",
-                                          fill=C["muted"], font=(UI, 9))
+            cv._draw(e)
+            cv.delete("txt")
+            cv.create_text(14, 17, text=title.upper(), anchor="w", fill=C["muted"], font=(UI_SB, 8), tags="txt")
+            lab["big"] = cv.create_text(14, 39, text=lab.get("big_t", "—"), anchor="w", fill=C["ink"],
+                                        font=(UI_SB, 13), tags="txt")
+            lab["small"] = cv.create_text(e.width - 14, 39, text=lab.get("small_t", ""), anchor="e",
+                                          fill=C["muted"], font=(UI, 9), tags="txt")
 
         def set_(big, small):
             lab["big_t"], lab["small_t"] = big, small
@@ -583,11 +714,11 @@ class DetailWindow(CardWindow):
     def __init__(self, parent: HistoryWindow, r: dict):
         super().__init__(parent, parent.pet, 560, 460, f"Запрос #{r.get('id')}",
                          f"{(r.get('created_at') or '').replace('T', ' ')} · {r.get('model') or ''}", pose="think")
-        box = tk.Canvas(self.body, bg=C["card"], highlightthickness=0, bd=0)
-        box.pack(fill="both", expand=True)
-        txt = tk.Text(box, wrap="word", font=(UI, 10), bg=C["chat"], fg=C["ink"], relief="flat", bd=0,
-                      highlightthickness=0, padx=6, pady=6, spacing2=2)
-        box.bind("<Configure>", lambda e: VoiceWindow._round_box(box, txt, e, C["chat"], 14, 8))
+        txt = tk.Text(self.body, wrap="word", font=(UI, 10), bg=C["chat"], fg=C["ink"], relief="flat", bd=0,
+                      highlightthickness=0, padx=4, pady=2, spacing2=2)
+        box = Panel(self.body, C["chat"], C["card"], r=12, inner=txt, pad=8)
+        txt.lift(box)
+        box.pack(fill="both", expand=True, pady=(8, 0))
         txt.tag_configure("cap", foreground=C["muted"], font=(UI_SB, 8), spacing1=10)
         txt.tag_configure("meta", foreground=C["muted"], font=(UI, 9))
         cost = r.get("cost_usd")
