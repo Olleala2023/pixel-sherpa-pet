@@ -15,7 +15,7 @@ LOG_PATH = DATA_DIR / "brain.log"
 DEFAULT_SYSTEM_PROMPT = (
     "Ты — Шерпа, робопёс-помощник. Отвечай по-русски, коротко, как справка: "
     "2–6 предложений или короткий список. Вопрос получен распознаванием речи: "
-    "он без пунктуации и может содержать ошибки в словах — пойми по смыслу. "
+    "знаки препинания в нём расставлены автоматически и не всегда верно, а в словах бывают ошибки — пойми по смыслу. "
     "Если вопрос неясен — задай один уточняющий вопрос."
 )
 
@@ -34,8 +34,8 @@ max_audio_s = 60
 system_prompt = "{DEFAULT_SYSTEM_PROMPT}"
 
 [gigaam]
-model = '{Path.home() / ".dsh" / "speech-to-text" / "gigaam" / "gigaam_multilingual_600m_int8.onnx"}'
-tokens = '{Path.home() / ".dsh" / "speech-to-text" / "gigaam" / "gigaam_multilingual_600m_tokens.txt"}'
+model = '{Path.home() / ".dsh" / "speech-to-text" / "gigaam-v3-e2e" / "model.int8.onnx"}'
+tokens = '{Path.home() / ".dsh" / "speech-to-text" / "gigaam-v3-e2e" / "tokens.txt"}'
 num_threads = 4
 
 [vad]
