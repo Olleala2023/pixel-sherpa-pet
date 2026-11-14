@@ -40,8 +40,8 @@ num_threads = 4
 
 [vad]
 model = "models/silero_vad.onnx"   # относительно папки brain/
-threshold = 0.5
-min_silence_s = 0.5
+threshold = 0.4
+min_silence_s = 0.8
 min_speech_s = 0.25
 max_speech_s = 20
 '''
@@ -50,8 +50,8 @@ max_speech_s = 20
 @dataclass
 class VadCfg:
     model: Path
-    threshold: float = 0.5
-    min_silence_s: float = 0.5
+    threshold: float = 0.4
+    min_silence_s: float = 0.8
     min_speech_s: float = 0.25
     max_speech_s: float = 20.0
 
@@ -115,8 +115,8 @@ def load_config(path: Path = CONFIG_PATH) -> Config:
     cfg.gigaam_threads = int(g.get("num_threads", 4))
     cfg.vad = VadCfg(
         model=vad_model,
-        threshold=float(v.get("threshold", 0.5)),
-        min_silence_s=float(v.get("min_silence_s", 0.5)),
+        threshold=float(v.get("threshold", 0.4)),
+        min_silence_s=float(v.get("min_silence_s", 0.8)),
         min_speech_s=float(v.get("min_speech_s", 0.25)),
         max_speech_s=float(v.get("max_speech_s", 20)),
     )
