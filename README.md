@@ -73,7 +73,7 @@ pyw -3 sherpa_pet.py
 - `sherpa_pet.py` — окно без рамки поверх остальных, сидит на верхней кромке панели задач.
 - `build_sherpa_pack.py` — заново собирает PNG, GIF, кадры Shimeji и `sherpa.ico`.
 - `make_sounds.py` — синтезирует звуки (нужен numpy) и кладёт выбранные в `sounds/`.
-- `sherpa_voice.py` — запись с микрофона и клиент мозга; `sherpa_voice_ui.py` — окна справки и истории.
+- `sherpa_voice.py` — запись с микрофона и клиент мозга; `sherpa_voice_ui.py` — окна справки и истории; `sherpa_markdown.py` — Markdown в ответах (жирный, списки, код, ссылки). Текст в переписке выделяется мышью и копируется (Ctrl+C, правая кнопка).
 - `brain/` — мозг: распознавание (GigaAM v3 e2e + Silero VAD), нейронка (Pydantic AI + OpenRouter), история в SQLite.
 - `sherpa-chibi-pack/` — готовый пакет: `frames/`, `gifs/`, `shimeji/img/shime1.png` … `shime46.png`.
 - `собачка.html` — три пиксельных стиля в браузере, у чиби шесть настроений.

@@ -15,6 +15,7 @@ from tkinter import ttk
 from PIL import Image, ImageDraw, ImageTk
 
 from build_sherpa_pack import H, W, draw_chibi_frame
+from sherpa_markdown import MdStyle, parse, plain
 from sherpa_voice import MAX_REC_S, BrainClient, Recorder, _Worker, err_text
 
 # Палитра из build_sherpa_pack.py: контур K, корпус w, фирменный голубой b/B, свечение o
@@ -302,7 +303,11 @@ class CardWindow(tk.Toplevel):
 
 
 class Chat(tk.Canvas):
-    """Переписка пузырями: вопрос справа голубым, ответ слева. Пузыри гладкие (Pillow), без рамок вокруг."""
+    """Переписка пузырями: вопрос справа голубым, ответ слева. Пузыри гладкие (Pillow), без рамок вокруг.
+
+    Текст в пузыре — tk.Text только для чтения: его можно выделять мышью, копировать (Ctrl+C, правая кнопка),
+    а ответ нейронки показывается с Markdown (жирный, списки, код, ссылки). Высоту пузыря заранее меряет
+    невидимый «замерщик» той же ширины: у Text высота в строках, а нужна в пикселях."""
 
     PADX, PADY, GAP, R = 12, 8, 8, 14
 
@@ -312,31 +317,97 @@ class Chat(tk.Canvas):
         self.w = width
         self.used = 0
         self.imgs: list = []
-        self.bind("<MouseWheel>", lambda e: self.yview_scroll(-1 if e.delta > 0 else 1, "units"))
+        self.texts: list[tk.Text] = []
+        self.style = MdStyle(self, UI, "Consolas", 10, ink=C["ink"], muted=C["muted"], soft=C["soft"],
+                             link=C["blue_dk"], code_bg="#DCE6EF", select_bg=C["sel"], bold_family=UI_SB)
+        self._meter: tk.Text | None = None
+        self.bind("<MouseWheel>", self._wheel)
+
+    def _wheel(self, e):
+        self.yview_scroll(-1 if e.delta > 0 else 1, "units")
+        return "break"
 
     def clear(self):
         self.delete("all")
+        for t in self.texts:
+            t.destroy()
+        self.texts.clear()
         self.imgs.clear()
         self.used = 0
 
+    def _new_text(self, master, bg) -> tk.Text:
+        t = tk.Text(master, wrap="word", width=1, height=1, font=self.style.base, bg=bg, fg=C["ink"],
+                    relief="flat", bd=0, highlightthickness=0, padx=0, pady=0, spacing1=0, spacing2=0,
+                    spacing3=0, cursor="xterm", exportselection=False, takefocus=0, insertwidth=0,
+                    selectbackground=C["glow"], selectforeground=C["ink"], inactiveselectbackground=C["glow"])
+        self.style.setup(t)
+        return t
+
+    def _height(self, spans, w: int) -> int:
+        """Высота текста в пикселях при ширине w: считает невидимое поле за краем окна, там же перенос строк."""
+        if self._meter is None:
+            self._meter = self._new_text(self.master, C["card"])
+        m = self._meter
+        m.place(x=-5000, y=0, width=w, height=4000)
+        self.style.insert(m, spans)
+        m.update_idletasks()
+        n = m.count("1.0", "end", "update", "ypixels")  # до "end", а не "end-1c": иначе последняя строка не в счёте
+        return int(n[0] if isinstance(n, (tuple, list)) else n or 0)
+
     def add(self, who: str, text: str) -> int:
-        """Добавляет пузырь, возвращает y его верха."""
+        """Добавляет пузырь, возвращает y его верха. text — как пришёл от нейронки (Markdown)."""
         you = who == "you"
-        maxw = int(self.w * (0.78 if you else 0.9))
-        tid = self.create_text(0, 0, text=text, width=maxw - 2 * self.PADX, anchor="nw", font=(UI, 10),
-                               fill=C["ink"])
-        x1, y1, x2, y2 = self.bbox(tid)
-        bw, bh = (x2 - x1) + 2 * self.PADX, (y2 - y1) + 2 * self.PADY
+        avail = int(self.w * (0.78 if you else 0.9)) - 2 * self.PADX
+        spans = plain(text) if you else parse(text)
+        tw = min(avail, self.style.natural_width(spans))
+        th = self._height(spans, tw)
+        bw, bh = tw + 2 * self.PADX, th + 2 * self.PADY
         y = self.used + (self.GAP if self.used else 0)
         bx = self.w - bw if you else 0
-        img = round_image(bw, bh, self.R, C["you_bg"] if you else C["dog_bg"], C["card"], tail="br" if you else "bl")
+        bg = C["you_bg"] if you else C["dog_bg"]
+        img = round_image(bw, bh, self.R, bg, C["card"], tail="br" if you else "bl")
         self.imgs.append(img)
         self.create_image(bx, y, image=img, anchor="nw")
-        self.coords(tid, bx + self.PADX, y + self.PADY)
-        self.tag_raise(tid)
+        t = self._new_text(self, bg)
+        self.style.insert(t, spans)
+        self._bind_bubble(t, text)
+        self.create_window(bx + self.PADX, y + self.PADY, window=t, anchor="nw", width=tw, height=th)
+        self.texts.append(t)
         self.used = y + bh
         self.configure(scrollregion=(0, 0, self.w, self.used))
         return y
+
+    # --- выделение и копирование ---
+    def _bind_bubble(self, t: tk.Text, raw: str) -> None:
+        t.bind("<MouseWheel>", self._wheel)
+        t.bind("<Button-1>", lambda e: self._focus(t), add="+")
+        t.bind("<Button-3>", lambda e: self._menu(e, t, raw))
+        t.bind("<Control-a>", lambda e: (t.tag_add("sel", "1.0", "end-1c"), "break")[1])
+
+    def _focus(self, t: tk.Text) -> None:
+        # окно без рамки не получает фокус само, а выделение в другом пузыре гасим: выделен один фрагмент
+        t.winfo_toplevel().focus_force()
+        t.focus_set()
+        for o in self.texts:
+            if o is not t:
+                o.tag_remove("sel", "1.0", "end")
+
+    def _put(self, text: str) -> None:
+        self.clipboard_clear()
+        self.clipboard_append(text)
+
+    def _menu(self, e, t: tk.Text, raw: str) -> None:
+        self._focus(t)
+        sel = t.tag_ranges("sel")
+        m = tk.Menu(t, tearoff=0, font=(UI, 9))
+        m.add_command(label="Копировать выделенное" if sel else "Копировать текст",
+                      command=lambda: self._put(t.get(*sel) if sel else t.get("1.0", "end-1c")))
+        m.add_command(label="Копировать как Markdown", command=lambda: self._put(raw))
+        m.add_command(label="Выделить всё", command=lambda: t.tag_add("sel", "1.0", "end-1c"))
+        try:
+            m.tk_popup(e.x_root, e.y_root)
+        finally:
+            m.grab_release()
 
 
 class VoiceWindow(CardWindow):
@@ -737,13 +808,17 @@ class DetailWindow(CardWindow):
         box = Panel(self.body, C["chat"], C["card"], r=12, inner=txt, pad=8)
         txt.lift(box)
         box.pack(fill="both", expand=True, pady=(8, 0))
+        md = MdStyle(self, UI, "Consolas", 10, ink=C["ink"], muted=C["muted"], soft=C["soft"], link=C["blue_dk"],
+                     code_bg="#D3DFEA", select_bg=C["sel"], bold_family=UI_SB)
+        md.setup(txt)
+        txt.configure(selectbackground=C["glow"], selectforeground=C["ink"], inactiveselectbackground=C["glow"])
         txt.tag_configure("cap", foreground=C["muted"], font=(UI_SB, 8), spacing1=10)
         txt.tag_configure("meta", foreground=C["muted"], font=(UI, 9))
         cost = r.get("cost_usd")
         r = {k: ("—" if v is None else v) for k, v in r.items()}
         parts = [
             ("ВОПРОС\n", "cap"), ((r.get("question") or "") + "\n", None),
-            ("ОТВЕТ\n", "cap"), ((r.get("answer") or ("Ошибка: " + (r.get("error") or ""))) + "\n", None),
+            ("ОТВЕТ\n", "cap"), ((r.get("answer") or ("Ошибка: " + (r.get("error") or ""))) + "\n", "md"),
             ("РАСПОЗНАНО\n", "cap"), ((r.get("transcript_raw") or "—") + "\n", "meta"),
             ("ЦИФРЫ\n", "cap"),
             (f"токены {r.get('tokens_in')} → {r.get('tokens_out')} · "
@@ -752,7 +827,11 @@ class DetailWindow(CardWindow):
              f"аудио {r.get('audio_file') or '—'} · статус {r.get('status')}", "meta"),
         ]
         for text, tag in parts:
-            txt.insert("end", text, tag or ())
+            if tag == "md":  # ответ нейронки — с Markdown
+                md.insert(txt, parse(text.strip()) + [("\n", ("n",))], clear=False)
+            else:
+                txt.config(state="normal")
+                txt.insert("end", text, tag or ())
         txt.config(state="disabled")
 
 
