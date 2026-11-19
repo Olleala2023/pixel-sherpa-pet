@@ -182,7 +182,6 @@ class SherpaDesktopPet:
         self.facing_left = True
 
         self.state = "idle"
-        self.manual_state = None
         self.roaming = True
         self.frame = 0
         self.last_frame_time = time.monotonic()
@@ -236,43 +235,32 @@ class SherpaDesktopPet:
 
     def _build_menu(self):
         self.menu = tk.Menu(self.root, tearoff=0)
-        self.menu.add_command(label="Авто-жизнь (гуляет сам)", command=lambda: self.set_manual(None))
-        self.menu.add_separator()
-        self.menu.add_command(label="Поза: Рад (сидит)", command=lambda: self.set_manual("idle"))
-        self.menu.add_command(label="Поза: Привет (машет)", command=lambda: self.set_manual("wave"))
-        self.menu.add_command(label="Поза: Смотри (экран чата)", command=lambda: self.set_manual("look"))
-        self.menu.add_command(label="Поза: Думает", command=lambda: self.set_manual("think"))
-        self.menu.add_command(label="Поза: Ура! (прыгает)", command=lambda: self.set_manual("jump"))
-        self.menu.add_command(label="Поза: Спит (z-z-z)", command=lambda: self.set_manual("sleep"))
-        self.menu.add_separator()
         self.menu.add_command(label="Спросить голосом… (двойной клик)", command=self.open_voice)
         self.menu.add_command(label="История запросов…", command=self.open_history)
         self.menu.add_command(label="Настройки нейронки…", command=self.open_settings)
         self.menu.add_separator()
-        self.menu.add_command(label="Вкл/Выкл прогулку по панели", command=self.toggle_roaming)
-        self.menu.add_command(label="Вкл/Выкл звуки", command=self.toggle_sound)
+        # галочки показывают, что включено сейчас
+        self.var_roam = tk.BooleanVar(self.root, value=self.roaming)
+        self.var_sound = tk.BooleanVar(self.root, value=self.sound_on)
+        self.var_scale = tk.IntVar(self.root, value=self.scale)
+        self.menu.add_checkbutton(label="Гулять по панели", variable=self.var_roam, command=self.toggle_roaming)
+        self.menu.add_checkbutton(label="Звуки", variable=self.var_sound, command=self.toggle_sound)
         size_menu = tk.Menu(self.menu, tearoff=0)
         for s, label in ((2, "Мелкий (2x)"), (3, "Средний (3x)"), (4, "Крупный (4x)"), (5, "Очень крупный (5x)")):
-            size_menu.add_command(label=label, command=lambda sc=s: self.change_scale(sc))
+            size_menu.add_radiobutton(label=label, variable=self.var_scale, value=s,
+                                      command=lambda sc=s: self.change_scale(sc))
         self.menu.add_cascade(label="Размер", menu=size_menu)
         self.menu.add_separator()
         self.menu.add_command(label="Закрыть Шерпу", command=self.root.destroy)
 
-    def set_manual(self, st):
-        self.manual_state = st
-        self.temp_override_until = 0.0
-        if st is not None:
-            self.state = st
-            self._draw()
-
     def toggle_roaming(self):
-        self.roaming = not self.roaming
+        self.roaming = self.var_roam.get()
         if not self.roaming and self.state == "walk":
             self.state = "idle"
             self._draw()
 
     def toggle_sound(self):
-        self.sound_on = not self.sound_on
+        self.sound_on = self.var_sound.get()
 
     def _clamp_position(self):
         min_x = float(self.work_left + 8)
@@ -335,7 +323,7 @@ class SherpaDesktopPet:
         else:
             if self.y >= self.ground_y:
                 self.y = float(self.ground_y)
-                self.state = self.manual_state or "idle"
+                self.state = "idle"
                 self.state_until = now + 3.0
                 self._draw()
             else:
@@ -543,8 +531,6 @@ class SherpaDesktopPet:
                     pass
                 elif ext:
                     self.state = ext
-                elif self.manual_state:
-                    self.state = self.manual_state
                 elif idle_sec >= 90.0:
                     self.state = "sleep"
                 else:

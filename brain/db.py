@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS requests (
   error          TEXT,
   messages_json  TEXT
 );
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE INDEX IF NOT EXISTS requests_created ON requests(created_at);
 CREATE INDEX IF NOT EXISTS requests_session ON requests(session_id, turn);
 """
@@ -69,7 +70,22 @@ class Db:
         ).fetchone()
         return float(r[0])
 
+    def get_meta(self, key: str) -> str | None:
+        r = self.conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return r[0] if r else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        self.conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
+
+    def reset_stats(self) -> str:
+        """Обнуляет счётчики расхода (история запросов остаётся): считаем только то, что позже этой метки."""
+        now = datetime.now().isoformat(timespec="seconds")
+        self.set_meta("stats_reset_at", now)
+        return now
+
     def stats_since(self, since_iso: str) -> dict:
+        """Статистика с даты since_iso, но не раньше последнего сброса."""
+        since_iso = max(since_iso, self.get_meta("stats_reset_at") or "")
         r = self.conn.execute(
             "SELECT COUNT(*) AS requests, COALESCE(SUM(tokens_in), 0) AS tokens_in, "
             "COALESCE(SUM(tokens_out), 0) AS tokens_out, COALESCE(SUM(cost_usd), 0) AS cost_usd "

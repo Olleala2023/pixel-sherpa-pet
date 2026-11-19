@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import tkinter as tk
 import webbrowser
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 from PIL import Image, ImageDraw, ImageTk
 
@@ -33,6 +33,7 @@ C = {
     "white": "#FFFFFF",
     "red": "#E5484D",
     "red_dk": "#C93A3F",
+    "green": "#2E9E5B",
     "hover": "#E2EBF3",
     "sel": "#D4EBF8",
     "you_bg": "#DDEEFA",  # пузырь вопроса: светло-голубой, не перетягивает внимание
@@ -48,6 +49,52 @@ I_SETTINGS, I_EYE = "\ue713", "\ue7b3"
 RADIUS = 16
 INSET = 12
 SS = 4  # во сколько раз крупнее рисуем перед уменьшением (сглаживание)
+
+
+def clipboard_keys(w) -> None:
+    """Ctrl+C/V/X/A и меню правой кнопки в поле ввода (Entry или Text).
+
+    Tk вешает эти сочетания на латинские клавиши, и при русской раскладке они молчат (Ctrl+М вместо Ctrl+V).
+    Поэтому смотрим на код клавиши (он не зависит от раскладки) и вызываем те же действия сами."""
+    is_text = isinstance(w, tk.Text)
+    actions = {86: "<<Paste>>", 67: "<<Copy>>", 88: "<<Cut>>"}  # V, C, X
+
+    def select_all():
+        if is_text:
+            w.tag_add("sel", "1.0", "end-1c")
+        else:
+            w.select_range(0, "end")
+            w.icursor("end")
+
+    def on_key(e):
+        if e.keycode == 65:  # A
+            select_all()
+            return "break"
+        ev = actions.get(e.keycode)
+        if ev:
+            w.event_generate(ev)
+            return "break"
+        return None
+
+    def on_menu(e):
+        w.focus_set()
+        m = tk.Menu(w, tearoff=0, font=(UI, 9))
+        m.add_command(label="Вырезать", command=lambda: w.event_generate("<<Cut>>"))
+        m.add_command(label="Копировать", command=lambda: w.event_generate("<<Copy>>"))
+        m.add_command(label="Вставить", command=lambda: w.event_generate("<<Paste>>"))
+        m.add_separator()
+        m.add_command(label="Выделить всё", command=select_all)
+        try:
+            m.tk_popup(e.x_root, e.y_root)
+        finally:
+            m.grab_release()
+
+    w.bind("<Control-KeyPress>", on_key)
+    w.bind("<Button-3>", on_menu)
+
+
+def money(v) -> str:
+    return f"${(v or 0):.4f}"
 
 
 def _rgb(h: str) -> tuple[int, int, int]:
@@ -292,8 +339,8 @@ class CardWindow(tk.Toplevel):
     def _drag_move(self, e):
         self.geometry(f"+{e.x_root - self._dx}+{e.y_root - self._dy}")
 
-    def set_subtitle(self, text, error=False):
-        self.sub_lbl.config(text=text, fg=C["red"] if error else C["muted"])
+    def set_subtitle(self, text, error=False, ok=False):
+        self.sub_lbl.config(text=text, fg=C["red"] if error else C["green"] if ok else C["muted"])
 
     def set_pose(self, pose):
         self.avatar_lbl.config(image=avatar(pose))
@@ -455,6 +502,7 @@ class VoiceWindow(CardWindow):
         self.q_text.bind("<FocusIn>", self._ph_off)
         self.q_text.bind("<FocusOut>", self._ph_on)
         self.q_text.bind("<Button-1>", lambda e: self.focus_force())
+        clipboard_keys(self.q_text)
         self._ph_on()
 
         # --- низ: подсказка (пока пусто) или действия и цифры (после ответа) ---
@@ -704,7 +752,7 @@ class HistoryWindow(CardWindow):
             ("tokens", "Токены", 80), ("cost", "$", 80))
 
     def __init__(self, pet, client: BrainClient):
-        super().__init__(pet.root, pet, 860, 470, "История", "Загружаю…", pose="look")
+        super().__init__(pet.root, pet, 860, 490, "История", "Загружаю…", pose="look")
         self.client = client
         self.worker = _Worker(self)
         self.rows: dict[str, dict] = {}
@@ -713,8 +761,8 @@ class HistoryWindow(CardWindow):
 
         self.cards = tk.Frame(self.body, bg=C["card"])
         self.cards.pack(fill="x", pady=(8, 8))
-        self.today = self._stat_card("Сегодня")
-        self.month = self._stat_card("Месяц")
+        self.cards_set = {k: self._stat_card(t, last=k == "all") for k, t in
+                          (("today", "Сегодня"), ("week", "7 дней"), ("days30", "30 дней"), ("all", "Всё время"))}
 
         inner = tk.Frame(self.body, bg=C["white"])
         box = Panel(self.body, C["white"], C["card"], r=12, outline=C["border"], inner=inner, pad=6)
@@ -732,23 +780,28 @@ class HistoryWindow(CardWindow):
         sb.pack(side="right", fill="y")
         self.tree.pack(side="left", fill="both", expand=True)
         self.tree.bind("<Double-1>", self.show_row)
-        tk.Label(self.body, text="Двойной клик по строке — полный ответ", bg=C["card"], fg=C["soft"],
-                 font=(UI, 8), anchor="w").pack(fill="x", pady=(4, 0))
+        foot = tk.Frame(self.body, bg=C["card"])
+        foot.pack(fill="x", pady=(4, 0))
+        tk.Label(foot, text="Двойной клик по строке — полный ответ", bg=C["card"], fg=C["soft"],
+                 font=(UI, 8), anchor="w").pack(side="left")
+        LinkButton(foot, "Сбросить счётчик расхода", self.reset_stats).pack(side="right")
         self.load()
 
-    def _stat_card(self, title):
-        cv = Panel(self.cards, C["chat"], C["card"], r=12, height=58)
-        cv.pack(side="left", fill="x", expand=True, padx=(0, 8) if title == "Сегодня" else 0)
+    def _stat_card(self, title, last=False):
+        cv = Panel(self.cards, C["chat"], C["card"], r=12, height=74, width=10)
+        col = self.cards.grid_size()[0]
+        self.cards.columnconfigure(col, weight=1, uniform="stat")  # четыре карточки одной ширины
+        cv.grid(row=0, column=col, sticky="ew", padx=0 if last else (0, 8))
         lab = {}
 
         def draw(e):
             cv._draw(e)
             cv.delete("txt")
-            cv.create_text(14, 17, text=title.upper(), anchor="w", fill=C["muted"], font=(UI_SB, 8), tags="txt")
-            lab["big"] = cv.create_text(14, 39, text=lab.get("big_t", "—"), anchor="w", fill=C["ink"],
+            cv.create_text(14, 16, text=title.upper(), anchor="w", fill=C["muted"], font=(UI_SB, 8), tags="txt")
+            lab["big"] = cv.create_text(14, 38, text=lab.get("big_t", "—"), anchor="w", fill=C["ink"],
                                         font=(UI_SB, 13), tags="txt")
-            lab["small"] = cv.create_text(e.width - 14, 39, text=lab.get("small_t", ""), anchor="e",
-                                          fill=C["muted"], font=(UI, 9), tags="txt")
+            lab["small"] = cv.create_text(14, 59, text=lab.get("small_t", ""), anchor="w",
+                                          fill=C["muted"], font=(UI, 8), tags="txt")
 
         def set_(big, small):
             lab["big_t"], lab["small_t"] = big, small
@@ -764,13 +817,25 @@ class HistoryWindow(CardWindow):
         self.worker.run(lambda: (self.client.stats(), self.client.history(50)), self._fill,
                         lambda e: self.set_subtitle(err_text(e), True))
 
+    def reset_stats(self) -> None:
+        if not messagebox.askyesno(
+                "Сброс расхода",
+                "Обнулить счётчики расхода (сегодня, 7 дней, 30 дней, всё время)?\n\n"
+                "История запросов останется. Дневной лимит считается по-прежнему по реальным тратам за сегодня.",
+                parent=self):
+            return
+        self.set_subtitle("Сбрасываю…")
+        self.worker.run(self.client.reset_stats, lambda _: self.load(),
+                        lambda e: self.set_subtitle(err_text(e), True))
+
     def _fill(self, res) -> None:
         st, hist = res
-        t, m = st["today"], st["month"]
-        self.today(f"${t['cost_usd']:.4f}  из ${t['limit_usd']:.2f}",
-                   f"{t['requests']} запросов · {t['tokens_in'] + t['tokens_out']} токенов")
-        self.month(f"${m['cost_usd']:.4f}", f"{m['requests']} запросов · {m['tokens_in'] + m['tokens_out']} токенов")
-        self.set_subtitle(f"Последние {len(hist)} запросов · модель {st.get('model', '')}")
+        for key, put in self.cards_set.items():
+            s = st[key]
+            big = money(s["cost_usd"]) + (f"  из ${s['limit_usd']:.2f}" if key == "today" else "")
+            put(big, f"{s['requests']} запросов · {s['tokens_in'] + s['tokens_out']} токенов")
+        since = (f" · счётчики с {st['reset_at'].replace('T', ' ')[5:16]}" if st.get("reset_at") else "")
+        self.set_subtitle(f"Последние {len(hist)} запросов · модель {st.get('model', '')}{since}")
         self.tree.delete(*self.tree.get_children())
         self.rows.clear()
         for i, r in enumerate(hist):
@@ -874,9 +939,8 @@ class SettingsWindow(CardWindow):
     учётных данных Windows — не в config.toml и не в базу. Пустое поле ключа — ключ не меняется."""
 
     WIDTH = 420
-    SRC = {"windows": "сохранён в диспетчере учётных данных Windows",
-           "env": "берётся из переменной окружения OPENROUTER_API_KEY",
-           None: "не задан — справка не сможет отвечать"}
+    SRC = {"windows": "хранится в диспетчере учётных данных Windows",
+           "env": "берётся из переменной окружения OPENROUTER_API_KEY"}
 
     def __init__(self, pet, client: BrainClient):
         super().__init__(pet.root, pet, self.WIDTH, 300, "Настройки", "Загружаю…", pose="look")
@@ -884,6 +948,9 @@ class SettingsWindow(CardWindow):
         self.worker = _Worker(self)
         self.providers: dict[str, str] = {"openrouter": "OpenRouter"}
         self.key_source = None
+        self.key_hint: str | None = None  # маска сохранённого ключа (…a1b2), пока поле пустое
+        self._key_ph = False  # в поле ключа сейчас серая подсказка, а не набранный текст
+        self._eye_open = False
 
         self._label("Провайдер")
         self.provider = tk.StringVar(value="OpenRouter")
@@ -897,6 +964,8 @@ class SettingsWindow(CardWindow):
 
         self._label("Ключ API")
         self.key = self._entry(show="•", eye=True)
+        self.key.bind("<FocusIn>", self._key_ph_off)
+        self.key.bind("<FocusOut>", self._key_ph_on)
         self.key_info = tk.Label(self.body, text="", bg=C["card"], fg=C["muted"], font=(UI, 8), anchor="w",
                                  justify="left", width=1, wraplength=self.WIDTH - 2 * INSET - 4)
         self.key_info.pack(fill="x", pady=(4, 0))
@@ -905,17 +974,33 @@ class SettingsWindow(CardWindow):
         self._link_line("Где взять — ", "openrouter.ai/keys", "https://openrouter.ai/keys", parent=row)
         self.del_link = LinkButton(row, "Удалить сохранённый ключ", self.clear_key)
 
+        self._label("Расход")
+        self.spend = tk.Label(self.body, text="Загружаю…", bg=C["card"], fg=C["ink"], font=(UI, 9), anchor="w",
+                              justify="left", width=1, wraplength=self.WIDTH - 2 * INSET - 4)
+        self.spend.pack(fill="x")
+        row2 = tk.Frame(self.body, bg=C["card"])
+        row2.pack(fill="x")
+        self.spend_note = tk.Label(row2, text="", bg=C["card"], fg=C["soft"], font=(UI, 8))
+        self.spend_note.pack(side="left")
+        LinkButton(row2, "Сбросить счётчик", self.reset_stats).pack(side="right")
+
         btns = tk.Frame(self.body, bg=C["card"])
         btns.pack(fill="x", pady=(14, 0))
         self.save_btn = PillButton(btns, "Сохранить", self.save)
         self.save_btn.pack(side="right")
         LinkButton(btns, "Закрыть", self.close).pack(side="right", padx=(0, 8))
-        tk.Label(btns, text="При сохранении проверю ключ\nи модель в OpenRouter — бесплатно", bg=C["card"],
-                 fg=C["soft"], font=(UI, 8), justify="left").pack(side="left")
+        self.check_btn = PillButton(btns, "Проверить", self.check, w=100, bg=C["chat"], hover=C["border"],
+                                    fg=C["blue_dk"])
+        self.check_btn.pack(side="left")
+        tk.Label(self.body, text="Проверка бесплатна: смотрю в OpenRouter, есть ли модель и принят ли ключ, "
+                                 "вопрос нейронке не задаю. «Сохранить» проверяет так же.",
+                 bg=C["card"], fg=C["soft"], font=(UI, 8), justify="left", anchor="w", width=1,
+                 wraplength=self.WIDTH - 2 * INSET - 4).pack(fill="x", pady=(6, 0))
 
         self.fit()
         self.focus_force()
         self.worker.run(self.client.settings, self._fill, self._on_error)
+        self.worker.run(self.client.stats, self._fill_stats, lambda e: self.spend.config(text="не загрузился"))
 
     # --- поля ---
     def _label(self, text):
@@ -930,10 +1015,10 @@ class SettingsWindow(CardWindow):
         box.pack(fill="x")
         e.bind("<Button-1>", lambda ev: self.focus_force())
         e.bind("<Return>", lambda ev: self.save())
+        clipboard_keys(e)
         if eye:  # глазок справа в поле: показать/скрыть набранный ключ
             b = IconButton(box, I_EYE, size=26, bg=C["white"], fg=C["soft"], hover=C["hover"],
-                           parent_bg=C["white"], icon_size=10,
-                           command=lambda: e.config(show="" if e.cget("show") else "•"))
+                           parent_bg=C["white"], icon_size=10, command=self._toggle_eye)
 
             def draw(ev):
                 box._draw(ev)
@@ -962,58 +1047,140 @@ class SettingsWindow(CardWindow):
         self.provider.set(self.providers.get(st.get("provider"), "OpenRouter"))
         self.model.delete(0, "end")
         self.model.insert(0, st.get("model", ""))
-        self._key_state(st.get("key_source"))
+        self._key_state(st.get("key_source"), st.get("key_hint"))
         self.set_subtitle("Нейронка для справки")
 
-    def _key_state(self, src) -> None:
-        self.key_source = src
-        self.key_info.config(text="Сейчас ключ " + self.SRC.get(src, self.SRC[None]) +
-                                  ". Пустое поле — ключ не меняется.",
-                             fg=C["red"] if src is None else C["muted"])
+    def _fill_stats(self, st: dict) -> None:
+        def one(title, s):
+            return f"{title} {money(s['cost_usd'])} ({s['requests']})"
+
+        self.spend.config(text=" · ".join((one("7 дней", st["week"]), one("30 дней", st["days30"]),
+                                           one("всё время", st["all"]))))
+        r = st.get("reset_at")
+        self.spend_note.config(text=f"в скобках — запросов · с {r.replace('T', ' ')[5:16]}" if r
+                               else "в скобках — число запросов")
+        self.fit()
+
+    def reset_stats(self) -> None:
+        if not messagebox.askyesno("Сброс расхода", "Обнулить счётчики расхода?\n\nИстория запросов останется.",
+                                   parent=self):
+            return
+        self.worker.run(self.client.reset_stats, self._fill_stats, self._on_error)
+
+    # --- поле ключа: серая подсказка «ключ задан», пока оно пустое ---
+    def _key_clear(self) -> None:
+        self.key.delete(0, "end")
+        self._key_ph = False
+        self.key.config(fg=C["ink"], show="" if self._eye_open else "•")
+
+    def _key_ph_on(self, _e=None) -> None:
+        if self.key_hint and not self._key_ph and not self.key.get():
+            self.key.config(fg=C["soft"], show="")
+            self.key.insert(0, f"Ключ задан · {self.key_hint}")
+            self._key_ph = True
+
+    def _key_ph_off(self, _e=None) -> None:
+        if self._key_ph:
+            self._key_clear()
+
+    def _key_value(self) -> str:
+        return "" if self._key_ph else self.key.get().strip()
+
+    def _toggle_eye(self) -> None:
+        self._eye_open = not self._eye_open
+        if not self._key_ph:
+            self.key.config(show="" if self._eye_open else "•")
+
+    def _key_state(self, src, hint=None) -> None:
+        self.key_source, self.key_hint = src, hint if src else None
+        if src:
+            self.key_info.config(
+                text=f"✓ Ключ задан ({hint}), {self.SRC[src]}. Чтобы заменить — вставь новый и нажми «Сохранить».",
+                fg=C["green"])
+        else:
+            self.key_info.config(text="Ключа нет — справка не сможет отвечать. Вставь ключ и нажми «Сохранить».",
+                                 fg=C["red"])
         if src == "windows":
             self.del_link.pack(side="right")
         else:
             self.del_link.pack_forget()
+        if self._key_ph:  # подсказка устарела (ключ сменился или удалён)
+            self._key_clear()
+        try:
+            focused = self.focus_get() is self.key
+        except KeyError:  # фокус в выпадающем списке
+            focused = False
+        if not focused:
+            self._key_ph_on()
         self.fit()
 
     def _provider_id(self) -> str:
         name = self.provider.get()
         return next((k for k, v in self.providers.items() if v == name), "openrouter")
 
+    def _payload(self, clear_key: bool = False) -> dict:
+        return {"provider": self._provider_id(), "model": self.model.get().strip(),
+                "api_key": self._key_value() or None, "clear_key": clear_key}
+
+    def _busy(self, on: bool) -> None:
+        self.save_btn.set_enabled(not on)
+        self.check_btn.set_enabled(not on)
+
+    @staticmethod
+    def _verdict(chk: dict, has_key: bool) -> tuple[str, bool]:
+        """Итог бесплатной проверки: (текст, это хорошо?)."""
+        mo, ko = chk.get("model_ok"), chk.get("key_ok")
+        if ko is False:
+            return "Ключ не принят OpenRouter — проверь, что он вставлен целиком", False
+        if mo is False:
+            return "Такой модели нет в OpenRouter — проверь имя", False
+        if mo is None and ko is None:
+            return "Проверить не удалось: нет связи с OpenRouter", False
+        if not has_key:
+            return "Модель есть, но ключа нет", False
+        if ko is None:
+            return "Модель есть, ключ проверить не удалось: нет связи", False
+        return "Подключение работает: ключ принят, модель найдена", True
+
+    def check(self) -> None:
+        """Проверка подключения без сохранения: берёт то, что сейчас в полях (пустой ключ — сохранённый)."""
+        if not self.check_btn.enabled:
+            return
+        payload = self._payload()
+        self._busy(True)
+        self.set_subtitle("Проверяю подключение…")
+        self.worker.run(lambda: self.client.check_settings(payload), self._on_checked, self._on_error)
+
+    def _on_checked(self, chk: dict) -> None:
+        self._busy(False)
+        text, good = self._verdict(chk, bool(chk.get("has_key")))
+        self.set_subtitle(f"Проверка: {text}", error=not good, ok=good)
+
     def save(self, clear_key: bool = False) -> None:
         if not self.save_btn.enabled:
             return
-        payload = {"provider": self._provider_id(), "model": self.model.get().strip(),
-                   "api_key": self.key.get().strip() or None, "clear_key": clear_key}
-        self.save_btn.set_enabled(False)
+        payload = self._payload(clear_key)
+        self._busy(True)
         self.set_subtitle("Проверяю в OpenRouter…")
         self.worker.run(lambda: self.client.save_settings(payload), self._on_saved, self._on_error)
 
     def clear_key(self) -> None:
-        self.key.delete(0, "end")
+        self._key_clear()
         self.save(clear_key=True)
 
     def _on_saved(self, st: dict) -> None:
-        self.save_btn.set_enabled(True)
-        self.key.delete(0, "end")
-        self._key_state(st.get("key_source"))
-        chk = st.get("checked") or {}
-        if chk.get("model_ok") is None:
-            note = "проверить не удалось: нет связи"
-        elif st.get("key_source") and chk.get("key_ok") is None:
-            note = "ключ не проверил: нет связи"
-        elif not st.get("key_source"):
-            note = "модель есть, ключа нет"
-        else:
-            note = "ключ и модель в порядке"
-        self.set_subtitle(f"Сохранено · {note}")
+        self._busy(False)
+        self._key_clear()
+        self._key_state(st.get("key_source"), st.get("key_hint"))
+        text, good = self._verdict(st.get("checked") or {}, bool(st.get("key_source")))
+        self.set_subtitle(f"Сохранено · {text}", error=not good, ok=good)
 
     def _on_error(self, e: Exception) -> None:
-        self.save_btn.set_enabled(True)
+        self._busy(False)
         self.set_subtitle(err_text(e), True)
 
-    def set_subtitle(self, text, error=False):
-        super().set_subtitle(text, error)
+    def set_subtitle(self, text, error=False, ok=False):
+        super().set_subtitle(text, error, ok)
         self.fit()
 
     def close(self) -> None:

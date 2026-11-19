@@ -113,6 +113,15 @@ class BrainClient:
         self.ensure_running()
         return self._req("/settings")
 
+    def reset_stats(self) -> dict:
+        self.ensure_running()
+        return self._req("/stats/reset", b"{}")
+
+    def check_settings(self, payload: dict) -> dict:
+        """Проверка модели и ключа без сохранения."""
+        self.ensure_running()
+        return self._req("/settings/check", json.dumps(payload).encode("utf-8"), timeout=40)
+
     def save_settings(self, payload: dict) -> dict:
         """Ключ уходит только мозгу на 127.0.0.1, тот кладёт его в диспетчер учётных данных Windows."""
         self.ensure_running()

@@ -7,7 +7,7 @@ import os
 import secrets
 import time
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -205,17 +205,17 @@ def create_app(cfg: Config) -> FastAPI:
         }
 
     def settings_view() -> dict:
-        _key, src = keystore.get_key(cfg.provider)
-        return {"provider": cfg.provider, "providers": PROVIDERS, "model": cfg.model, "key_source": src}
+        key, src = keystore.get_key(cfg.provider)
+        hint = ("…" + key[-4:]) if key and len(key) >= 12 else ("•••" if key else None)  # ключ целиком не отдаём
+        return {"provider": cfg.provider, "providers": PROVIDERS, "model": cfg.model, "key_source": src,
+                "key_hint": hint}
 
     @app.get("/settings")
     async def get_settings():
         return settings_view()
 
-    @app.post("/settings")
-    async def post_settings(body: SettingsIn):
-        """Проверяет модель и ключ (бесплатно, без вопроса к модели) и сохраняет. Ключ — только в Windows."""
-        brain.touch()
+    def _validated(body: SettingsIn) -> tuple[str, str, str | None, str | None]:
+        """(провайдер, модель, новый ключ, ключ для проверки) или ApiError."""
         provider, model = body.provider.strip(), body.model.strip()
         new_key = (body.api_key or "").strip() or None
         if provider not in PROVIDERS:
@@ -228,6 +228,22 @@ def create_app(cfg: Config) -> FastAPI:
             check_key = os.environ.get(keystore.ENV.get(provider, ""), "") or None
         else:
             check_key = keystore.get_key(provider)[0]
+        return provider, model, new_key, check_key
+
+    @app.post("/settings/check")
+    async def check_settings(body: SettingsIn):
+        """Проверка подключения без сохранения: есть ли модель и принят ли ключ (введённый или сохранённый)."""
+        brain.touch()
+        _provider, model, _new, check_key = _validated(body)
+        res = await asyncio.to_thread(brain.llm.check, model, check_key)
+        res["has_key"] = bool(check_key)
+        return res
+
+    @app.post("/settings")
+    async def post_settings(body: SettingsIn):
+        """Проверяет модель и ключ (бесплатно, без вопроса к модели) и сохраняет. Ключ — только в Windows."""
+        brain.touch()
+        provider, model, new_key, check_key = _validated(body)
         res = await asyncio.to_thread(brain.llm.check, model, check_key)
         if res["key_ok"] is False:
             raise ApiError(400, "bad_key", "OpenRouter не принял ключ — проверь, что вставил его целиком.")
@@ -250,12 +266,26 @@ def create_app(cfg: Config) -> FastAPI:
     async def history(limit: int = 50):
         return brain.db.history(max(1, min(limit, 500)))
 
-    @app.get("/stats")
-    async def stats():
+    def stats_view() -> dict:
         today = date.today()
         t = brain.db.stats_since(today.isoformat())
         t["limit_usd"] = cfg.daily_limit_usd
-        m = brain.db.stats_since(today.replace(day=1).isoformat())
-        return {"today": t, "month": m, "model": cfg.model}
+        return {
+            "today": t,
+            "week": brain.db.stats_since((today - timedelta(days=6)).isoformat()),  # 7 дней, считая сегодня
+            "days30": brain.db.stats_since((today - timedelta(days=29)).isoformat()),
+            "all": brain.db.stats_since(""),
+            "reset_at": brain.db.get_meta("stats_reset_at"),
+            "model": cfg.model,
+        }
+
+    @app.get("/stats")
+    async def stats():
+        return stats_view()
+
+    @app.post("/stats/reset")
+    async def stats_reset():
+        brain.db.reset_stats()
+        return stats_view()
 
     return app
