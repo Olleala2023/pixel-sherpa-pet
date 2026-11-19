@@ -12,3 +12,4 @@ __pycache__/
 brain/data/
 *.canvas.bak
 brain/config.toml
+.obsidian/
