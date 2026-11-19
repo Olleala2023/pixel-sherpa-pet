@@ -1,16 +1,18 @@
 # -*- coding: utf-8 -*-
 """
 Генератор пакета пиксельных спрайтов Чиби-пса Sherpa:
-1) sherpa-chibi-pack/frames/<state>_<frame>.png (оригинальные 30x28 и увеличенные 4x)
-2) sherpa-chibi-pack/gifs/sherpa_<state>.gif (анимированные GIF)
-3) sherpa-chibi-pack/shimeji/img/shime1..46.png (формат для claude-pet / Shimeji)
+1) assets/chibi-pack/frames/<state>_<frame>.png (оригинальные 30x28 и увеличенные 4x)
+2) assets/chibi-pack/gifs/sherpa_<state>.gif (анимированные GIF)
+3) assets/chibi-pack/shimeji/img/shime1..46.png (формат для claude-pet / Shimeji)
 4) sherpa.ico (иконка с точным целочисленным масштабом 32x32 -> 256x256)
+Запуск из корня проекта: python -m sherpa.sprites
+Также здесь рисуется сам пёс (draw_chibi_frame) — его берёт питомец.
 """
 from pathlib import Path
 from PIL import Image
 
-BASE_DIR = Path(__file__).resolve().parent
-PACK_DIR = BASE_DIR / "sherpa-chibi-pack"
+BASE_DIR = Path(__file__).resolve().parent.parent  # корень проекта
+PACK_DIR = BASE_DIR / "assets" / "chibi-pack"
 
 COLORS = {
     "K": (28, 40, 54, 255),      # Тёмно-синий контур

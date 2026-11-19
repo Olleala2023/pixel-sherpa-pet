@@ -20,7 +20,7 @@ import wave
 from pathlib import Path
 from tkinter import ttk
 
-PROJECT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = Path(__file__).resolve().parent.parent  # корень проекта
 BRAIN_CONFIG = PROJECT_DIR / "brain" / "config.toml"
 SR = 16000
 MAX_REC_S = 60

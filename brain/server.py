@@ -119,6 +119,12 @@ def create_app(cfg: Config) -> FastAPI:
         sec = len(x) / stt_mod.SR
         if sec > cfg.max_audio_s + 0.5:
             raise ApiError(413, "audio_too_long", f"Запись {sec:.0f} с, а можно не больше {cfg.max_audio_s:.0f} с.")
+        if not (cfg.gigaam_model.exists() and cfg.gigaam_tokens.exists()):
+            raise ApiError(
+                503, "no_model",
+                "Нет модели распознавания речи. Скачайте её командой python tools/download_model.py "
+                "(файлы model.int8.onnx и tokens.txt в brain/models/gigaam-v3-e2e/) и повторите."
+            )
         audio_id = datetime.now().strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(2)
         (AUDIO_DIR / f"{audio_id}.wav").write_bytes(body)
         brain.rotate_audio()

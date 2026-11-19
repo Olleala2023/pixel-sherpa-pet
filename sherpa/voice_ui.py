@@ -4,7 +4,7 @@
 Tk рисует круги и скругления без сглаживания (лесенкой), поэтому все круглые формы здесь рисует Pillow
 в 4× и уменьшает — края получаются гладкими. Окно справки компактное: пока вопросов нет, видны только
 шапка и строка ввода; переписка появляется над ними и растёт по содержимому.
-Логика записи и сети — в sherpa_voice.py.
+Логика записи и сети — в voice.py.
 """
 from __future__ import annotations
 
@@ -14,11 +14,11 @@ from tkinter import messagebox, ttk
 
 from PIL import Image, ImageDraw, ImageTk
 
-from build_sherpa_pack import H, W, draw_chibi_frame
-from sherpa_markdown import MdStyle, parse, plain
-from sherpa_voice import MAX_REC_S, BrainClient, Recorder, _Worker, err_text
+from .markdown_view import MdStyle, parse, plain
+from .sprites import H, W, draw_chibi_frame
+from .voice import MAX_REC_S, BrainClient, Recorder, _Worker, err_text
 
-# Палитра из build_sherpa_pack.py: контур K, корпус w, фирменный голубой b/B, свечение o
+# Палитра из sprites.py: контур K, корпус w, фирменный голубой b/B, свечение o
 C = {
     "key": "#010203",  # прозрачный цвет окна (как у самого пса)
     "card": "#F6F9FC",

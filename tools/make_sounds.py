@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 Синтез звуков-кандидатов для Шерпы: «подняли» и «упал на панель задач».
-Пишет WAV в sounds/candidates/ и страницу sounds/прослушать.html.
-Нужен только numpy. Запуск: py -3 make_sounds.py
+Пишет WAV в assets/sounds/candidates/ и страницу assets/sounds/прослушать.html.
+Нужен только numpy. Запуск из корня проекта: python tools/make_sounds.py
 """
 import wave
 from pathlib import Path
@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 SR = 22050
-OUT = Path(__file__).resolve().parent / "sounds" / "candidates"
+OUT = Path(__file__).resolve().parent.parent / "assets" / "sounds" / "candidates"
 
 
 def t_axis(dur):
@@ -285,7 +285,7 @@ if __name__ == "__main__":
     for name, fn, _, _, gain in SOUNDS_NEW:
         save(name, fn(), gain=gain)
     write_page()
-    # Выбранные для Шерпы — под постоянными именами, их читает sherpa_pet.py
+    # Выбранные для Шерпы — под постоянными именами, их читает sherpa/pet.py
     import shutil
     for src, dst in CHOSEN.items():
         shutil.copyfile(OUT / src, OUT.parent / dst)

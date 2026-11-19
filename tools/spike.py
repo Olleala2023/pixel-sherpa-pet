@@ -1,6 +1,7 @@
 """Этап 0: разведка. GigaAM через sherpa-onnx (Python) и один вопрос через Pydantic AI + OpenRouter.
 
-Запуск: D:\\Program\\python.exe brain\\spike.py [путь.wav]
+Запуск из корня проекта: python tools/spike.py путь.wav
+(нужны ключ OpenRouter и модель GigaAM в brain/models/gigaam-v3-e2e/)
 """
 import asyncio
 import sys
@@ -10,10 +11,9 @@ from pathlib import Path
 
 import numpy as np
 
-GIGAAM_DIR = Path.home() / ".dsh" / "speech-to-text" / "gigaam"
-MODEL = GIGAAM_DIR / "gigaam_multilingual_600m_int8.onnx"
-TOKENS = GIGAAM_DIR / "gigaam_multilingual_600m_tokens.txt"
-DEFAULT_WAV = Path(r"C:\Users\Oleg\Documents\deepseek-harness\default-workspace\ru-test.wav")
+GIGAAM_DIR = Path(__file__).resolve().parent.parent / "brain" / "models" / "gigaam-v3-e2e"
+MODEL = GIGAAM_DIR / "model.int8.onnx"
+TOKENS = GIGAAM_DIR / "tokens.txt"
 
 
 def read_wav(path: Path) -> tuple[np.ndarray, int]:
@@ -67,6 +67,7 @@ async def llm() -> None:
 
 
 if __name__ == "__main__":
-    wav = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_WAV
-    stt(wav)
+    if len(sys.argv) < 2:
+        sys.exit("Укажите WAV-файл: python tools/spike.py путь.wav")
+    stt(Path(sys.argv[1]))
     asyncio.run(llm())

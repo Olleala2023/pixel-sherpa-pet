@@ -1,16 +1,17 @@
-agent-avatars/
-agent-sprites/
-agent-arcade/
-hatch-pet-claude/
-pixel-mascot/
-claude-pet/
+# Чужие репозитории для сравнения (references/просмотр.html остаётся в git)
+references/*/
+
 sherpa-state.txt
 __pycache__/
 *.pyc
+.venv/
 
-# мозг: база, аудио, лог
+# мозг: база, аудио, лог, личный конфиг, скачанная модель речи
 brain/data/
-*.canvas.bak
 brain/config.toml
+brain/models/gigaam-v3-e2e/
+
+# личное
+tools/test-audio/
+*.canvas.bak
 .obsidian/
-test-audio/

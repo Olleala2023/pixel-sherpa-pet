@@ -34,8 +34,9 @@ max_audio_s = 60
 system_prompt = "{DEFAULT_SYSTEM_PROMPT}"
 
 [gigaam]
-model = '{Path.home() / ".dsh" / "speech-to-text" / "gigaam-v3-e2e" / "model.int8.onnx"}'
-tokens = '{Path.home() / ".dsh" / "speech-to-text" / "gigaam-v3-e2e" / "tokens.txt"}'
+# Модель распознавания речи. Пути без диска — относительно папки brain/. Скачать: python tools/download_model.py
+model = "models/gigaam-v3-e2e/model.int8.onnx"
+tokens = "models/gigaam-v3-e2e/tokens.txt"
 num_threads = 4
 
 [vad]
@@ -95,6 +96,12 @@ def save_settings(provider: str, model: str, path: Path = CONFIG_PATH) -> None:
     tmp.replace(path)
 
 
+def _abs(p: str | Path) -> Path:
+    """Путь из конфига: относительный считается от папки brain/."""
+    p = Path(p)
+    return p if p.is_absolute() else BRAIN_DIR / p
+
+
 def _toml_str(v: str) -> str:
     return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
@@ -105,13 +112,11 @@ def load_config(path: Path = CONFIG_PATH) -> Config:
     raw = tomllib.loads(path.read_text(encoding="utf-8"))
     g = raw.get("gigaam", {})
     v = raw.get("vad", {})
-    vad_model = Path(v.get("model", "models/silero_vad.onnx"))
-    if not vad_model.is_absolute():
-        vad_model = BRAIN_DIR / vad_model
+    vad_model = _abs(v.get("model", "models/silero_vad.onnx"))
     top = {k: raw[k] for k in Config.__dataclass_fields__ if k in raw and not isinstance(raw[k], dict)}
     cfg = Config(**top)
-    cfg.gigaam_model = Path(g["model"])
-    cfg.gigaam_tokens = Path(g["tokens"])
+    cfg.gigaam_model = _abs(g.get("model", "models/gigaam-v3-e2e/model.int8.onnx"))
+    cfg.gigaam_tokens = _abs(g.get("tokens", "models/gigaam-v3-e2e/tokens.txt"))
     cfg.gigaam_threads = int(g.get("num_threads", 4))
     cfg.vad = VadCfg(
         model=vad_model,

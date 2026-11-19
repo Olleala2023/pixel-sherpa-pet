@@ -1,0 +1,2 @@
+# .bat должны быть с CRLF, иначе cmd путается в метках
+*.bat text eol=crlf

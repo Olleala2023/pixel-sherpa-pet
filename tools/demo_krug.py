@@ -4,7 +4,7 @@
 - Схвати кружок и потащи вверх (по умолчанию без звука).
 - Отпусти -> падает с ускорением, бьётся о панель -> «бонк», маленький отскок с тихим бонком.
 - Правый клик -> меню: звуки, отскок, сила тяжести, закрыть. Esc -> закрыть.
-Запуск: pyw -3 demo_krug.py   (самопроверка: py -3 demo_krug.py --test)
+Запуск из корня проекта: pythonw tools/demo_krug.py   (самопроверка: python tools/demo_krug.py --test)
 """
 import math
 import sys
@@ -13,9 +13,12 @@ import tkinter as tk
 import winsound
 from pathlib import Path
 
-from sherpa_pet import get_work_area
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))  # чтобы работал import sherpa при запуске из tools/
 
-SOUNDS = Path(__file__).resolve().parent / "sounds" / "candidates"
+from sherpa.pet import get_work_area  # noqa: E402
+
+SOUNDS = ROOT / "assets" / "sounds" / "candidates"
 UP_CHOICES = [
     ("", "без звука"),
     ("up_2a_whee_quiet.wav", "«уииии» тише"),
