@@ -23,6 +23,9 @@ try:
 except ImportError:  # не Windows — просто без звука
     winsound = None
 
+from PIL import Image, ImageTk
+
+from .smooth import upscale
 from .sprites import H, W, draw_chibi_frame
 
 TRANSPARENT_HEX = "#010203"
@@ -118,30 +121,15 @@ def get_work_area():
     return 0, 0, 1920, 1040
 
 
-def pil_to_tk_photo(pil_img, scale: int) -> tk.PhotoImage:
-    """Конвертирует RGBA PIL Image в tk.PhotoImage с чёткими пикселями без внешних библиотек."""
-    w, h = pil_img.size
-    photo = tk.PhotoImage(width=w * scale, height=h * scale)
-    px = pil_img.load()
-    rows_str = []
-    for y in range(h):
-        row_colors = []
-        for x in range(w):
-            r, g, b, a = px[x, y]
-            if a < 128:
-                hexc = TRANSPARENT_HEX
-            else:
-                hexc = f"#{r:02x}{g:02x}{b:02x}"
-            row_colors.extend([hexc] * scale)
-        line = "{" + " ".join(row_colors) + "}"
-        for _ in range(scale):
-            rows_str.append(line)
-    photo.put(" ".join(rows_str))
-    return photo
+def pil_to_tk_photo(pil_img, master) -> "ImageTk.PhotoImage":
+    """RGBA → картинка Tk: полупрозрачное и прозрачное становится цветом-ключом окна (там видно рабочий стол)."""
+    rgb = Image.new("RGB", pil_img.size, TRANSPARENT_HEX)
+    rgb.paste(pil_img.convert("RGB"), mask=pil_img.getchannel("A").point(lambda a: 255 if a >= 128 else 0))
+    return ImageTk.PhotoImage(rgb, master=master)
 
 
 class SherpaDesktopPet:
-    def __init__(self, scale: int = 4):
+    def __init__(self, scale: int = 3):
         self.root = tk.Tk()
         self.root.title("Sherpa Pet")
         self.root.overrideredirect(True)
@@ -234,16 +222,21 @@ class SherpaDesktopPet:
         self._draw()
 
     def _build_sprites(self):
+        """Кадры строятся по мере надобности (_sprite): сглаживание при 4×–5× стоит ~20 мс на кадр."""
         self.sprites.clear()
-        for st in self.states:
-            for flip in (False, True):
-                for frame in range(4):
-                    for blink in (False, True):
-                        for wag in (False, True):
-                            self.sprites[(st, flip, frame, blink, wag)] = pil_to_tk_photo(
-                                draw_chibi_frame(st, frame, flip_x=flip, blink=blink, wag=wag),
-                                self.scale,
-                            )
+        self._big = {}  # (поза, кадр, моргает, хвост) → увеличенная картинка PIL без отражения
+
+    def _sprite(self, key):
+        photo = self.sprites.get(key)
+        if photo is None:
+            st, flip, frame, blink, wag = key
+            base = (st, frame, blink, wag)
+            big = self._big.get(base)
+            if big is None:
+                big = self._big[base] = upscale(draw_chibi_frame(st, frame, blink=blink, wag=wag), self.scale)
+            img = big.transpose(Image.FLIP_LEFT_RIGHT) if flip else big
+            photo = self.sprites[key] = pil_to_tk_photo(img, self.root)
+        return photo
 
     def _build_menu(self):
         self.menu = tk.Menu(self.root, tearoff=0)
@@ -265,7 +258,8 @@ class SherpaDesktopPet:
         self.menu.add_checkbutton(label="Звуки", variable=self.var_sound, command=self.toggle_sound)
         self.menu.add_checkbutton(label="Отвечать облачком (без окна)", variable=self.var_bubble)
         size_menu = tk.Menu(self.menu, tearoff=0)
-        for s, label in ((2, "Мелкий (2x)"), (3, "Средний (3x)"), (4, "Крупный (4x)"), (5, "Очень крупный (5x)")):
+        for s, label in ((2, "Мелкий (2x)"), (3, "Средний (3x)"), (4, "Крупный (4x, сглаженный)"),
+                         (5, "Очень крупный (5x, сглаженный)")):
             size_menu.add_radiobutton(label=label, variable=self.var_scale, value=s,
                                       command=lambda sc=s: self.change_scale(sc))
         self.menu.add_cascade(label="Размер", menu=size_menu)
@@ -707,8 +701,7 @@ class SherpaDesktopPet:
     def _draw(self):
         flip =self.facing_left and self.state in ("walk", "idle")
         key = (self.state, flip, self.frame % 4, self.eyes_closed, self.tail_pose)
-        photo = self.sprites.get(key) or self.sprites[(self.state, flip, 0, False, False)]
-        self.canvas.itemconfig(self.img_id, image=photo)
+        self.canvas.itemconfig(self.img_id, image=self._sprite(key))
 
     def tick(self):
         now = time.monotonic()
@@ -805,7 +798,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Sherpa Chibi Desktop Pet")
-    parser.add_argument("--scale", type=int, default=4, help="Sprite scale (2..5)")
+    parser.add_argument("--scale", type=int, default=3, help="Sprite scale (2..5); 4 и 5 — со сглаженными углами")
     parser.add_argument("--screenshot-test", action="store_true", help="Exit after 0.8s for testing")
     args = parser.parse_args()
 
