@@ -2,6 +2,9 @@
 references/*/
 
 sherpa-state.txt
+# обновление: какая версия стоит (установка из ZIP) и когда проверяли
+.sherpa-version
+sherpa-update.json
 __pycache__/
 *.pyc
 .venv/

@@ -131,8 +131,14 @@ class BrainClient:
         raise BrainError("brain_down", "Мозг оборвал ответ на полуслове")
 
     def restart(self) -> None:
-        """Перезапуск мозга (новый конфиг и код): /shutdown, ждём, пока замолчит, поднимаем заново.
-        Старый мозг без /shutdown завершаем по pid из /health — это наш же процесс."""
+        """Перезапуск мозга (новый конфиг и код): гасим и поднимаем заново."""
+        self.stop()
+        self.url = brain_url()  # порт мог поменяться в config.toml
+        self.ensure_running()
+
+    def stop(self) -> None:
+        """Гасит мозг: /shutdown, ждём, пока замолчит. Старый мозг без /shutdown завершаем по pid из /health —
+        это наш же процесс. Мозга нет — ничего не делаем."""
         h = self.health()
         if h:
             try:
@@ -149,8 +155,6 @@ class BrainClient:
                 time.sleep(0.2)
             if self.health(timeout=0.3):
                 raise BrainError("brain_down", "Мозг не завершился за 10 с — закройте pythonw.exe в диспетчере задач")
-        self.url = brain_url()  # порт мог поменяться в config.toml
-        self.ensure_running()
 
     def history(self, limit: int = 50) -> list[dict]:
         self.ensure_running()

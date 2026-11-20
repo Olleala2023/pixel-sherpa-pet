@@ -29,6 +29,7 @@ TRANSPARENT_HEX = "#010203"
 ROOT = Path(__file__).resolve().parent.parent  # корень проекта
 STATE_FILE = ROOT / "sherpa-state.txt"
 MUTEX_NAME = "Local\\SherpaChibiDesktopPetSingletonMutex"
+_MUTEX = None  # дескриптор мьютекса одной копии; relaunch() отпускает его перед запуском новой
 ERROR_ALREADY_EXISTS = 183
 
 # Звуки падения (собирает tools/make_sounds.py)
@@ -213,6 +214,7 @@ class SherpaDesktopPet:
         self.bubble = None  # облачко над псом (bubble.py): вопрос и ответ без окна
         self.reminders: list[dict] = []  # {"at": time.time(), "text", "job"} — ставит нейронка (brain/tools.py)
         self.restarting = False
+        self.updating = False
         try:
             from .hotkey import GlobalHotkey
 
@@ -252,6 +254,7 @@ class SherpaDesktopPet:
         self.reminders_menu = tk.Menu(self.menu, tearoff=0, postcommand=self._fill_reminders_menu)
         self.menu.add_cascade(label="Напоминания", menu=self.reminders_menu)
         self.menu.add_command(label="Перезапустить мозг", command=self.restart_brain)
+        self.menu.add_command(label="Проверить обновления", command=self.check_updates)
         self.menu.add_separator()
         # галочки показывают, что включено сейчас
         self.var_roam = tk.BooleanVar(self.root, value=self.roaming)
@@ -428,8 +431,8 @@ class SherpaDesktopPet:
             self.bubble = Bubble(self, self._client())
         return self.bubble
 
-    def _say(self, text, hint="", seconds=8.0) -> bool:
-        return self._get_bubble().say(text, hint, seconds)
+    def _say(self, text, hint="", seconds=8.0, action=None) -> bool:
+        return self._get_bubble().say(text, hint, seconds, action=action)
 
     # --- перезапуск мозга: свежий config.toml и код без диспетчера задач ---
     def restart_brain(self):
@@ -455,6 +458,100 @@ class SherpaDesktopPet:
             self._say(err_text(e), "", 10.0)
 
         w.run(self._client().restart, done, fail)
+
+    # --- обновление с GitHub (updater.py): сам выбирает git или ZIP ---
+    def check_updates(self, manual: bool = True):
+        """manual=False — тихая автопроверка при запуске: облачко только если есть что ставить."""
+        if self.updating:
+            return
+        from . import updater
+        from .voice import _Worker
+
+        self.updating = True
+        if manual:
+            self._say("Проверяю обновления…", "", 30.0)
+        w = _Worker(self.root)
+
+        def done(info):
+            w.alive = False
+            self.updating = False
+            updater.mark_checked()
+            if not info.available:
+                if manual:
+                    self._say("У вас последняя версия ✓", "", 5.0)
+                return
+            text = updater.describe(info)
+            if info.blocked:
+                if manual:
+                    self._say(text, info.blocked, 30.0)
+                return
+            if not self._say(text, "пёс скачает её и перезапустится сам", 120.0,
+                             action=("", "Обновить", lambda: self.apply_update(info))):
+                pass  # облачко занято разговором — напомним при следующей проверке
+
+        def fail(e):
+            w.alive = False
+            self.updating = False
+            if manual:
+                self._say(f"Не проверил обновления: {e}", "", 10.0)
+
+        w.run(updater.check, done, fail)
+
+    def apply_update(self, info):
+        from . import updater
+        from .voice import _Worker
+
+        if self.updating:
+            return
+        self.updating = True
+        self._say("Обновляюсь…", "это займёт до минуты, если нужны новые пакеты", 300.0)
+        self.hold_pose("think", 300.0)
+        w = _Worker(self.root)
+
+        def work():
+            updater.apply(info)
+            try:  # мозг тоже на новом коде: гасим, пёс поднимет его при первом вопросе
+                self._client().stop()
+            except Exception:  # noqa: BLE001
+                pass
+
+        def done(_):
+            w.alive = False
+            self._say("Готово! Перезапускаюсь…", "", 10.0)
+            self.root.after(1200, self.relaunch)
+
+        def fail(e):
+            w.alive = False
+            self.updating = False
+            self.temp_override_until = 0.0
+            self._say(f"Не обновился: {e}", "", 30.0)
+
+        w.run(work, done, fail)
+
+    def relaunch(self):
+        """Запускает свежую копию пса и закрывает эту: мьютекс отпускаем заранее, иначе новая сразу выйдет."""
+        import subprocess
+
+        global _MUTEX
+        if _MUTEX and _MUTEX is not True:
+            try:
+                ctypes.windll.kernel32.CloseHandle(_MUTEX)
+            except Exception:  # noqa: BLE001
+                pass
+            _MUTEX = None
+        exe = Path(sys.executable)
+        pyw = exe.with_name("pythonw.exe")
+        subprocess.Popen([str(pyw if pyw.exists() else exe), str(ROOT / "sherpa_pet.py")], cwd=str(ROOT),
+                         creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
+        if self.hotkey is not None:
+            self.hotkey.stop()
+        self.root.destroy()
+
+    def _auto_check_updates(self):
+        from . import updater
+
+        if updater.due_for_auto_check():
+            self.check_updates(manual=False)
 
     def ask_bubble(self):
         """Вопрос облачком: двойной щелчок — запись, ещё щелчок — готово."""
@@ -712,13 +809,16 @@ def main():
     parser.add_argument("--screenshot-test", action="store_true", help="Exit after 0.8s for testing")
     args = parser.parse_args()
 
-    mutex_handle = acquire_single_instance_mutex()
-    if not mutex_handle and not args.screenshot_test:
+    global _MUTEX
+    _MUTEX = acquire_single_instance_mutex()
+    if not _MUTEX and not args.screenshot_test:
         sys.exit(0)
 
     pet = SherpaDesktopPet(scale=args.scale)
     if args.screenshot_test:
         pet.root.after(800, pet.root.destroy)
+    else:
+        pet.root.after(60_000, pet._auto_check_updates)  # через минуту после старта, не чаще раза в сутки
     pet.run()
 
 

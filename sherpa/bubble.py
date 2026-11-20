@@ -77,6 +77,8 @@ class Bubble(tk.Toplevel):
         self.partial = ""
         self.streaming = False
         self.flush_job = None
+        self.notice_action = None
+        self.action_btn = None
         self.hide_job = None
         self.hover = False
         self.mode = "idle"  # listen / busy / answer / error
@@ -171,7 +173,7 @@ class Bubble(tk.Toplevel):
             cv.create_window(PAD - 4, y, window=self.foot, anchor="nw", width=tw + 8, height=FOOT_H, tags="content")
             y += FOOT_H + PAD - 6
         else:
-            tw = MIN_W + 40
+            tw = MIN_W + (100 if self.notice_action else 40)
             self.update_idletasks()
             cv.create_window(PAD, y, window=self.status, anchor="nw", width=tw - 22, tags="content")
             cv.create_window(PAD + tw - 14, y - 2, window=self.close_btn, anchor="nw", tags="content")
@@ -182,6 +184,11 @@ class Bubble(tk.Toplevel):
             if self.hint.cget("text"):
                 cv.create_window(PAD, y + 2, window=self.hint, anchor="nw", width=tw, tags="content")
                 y += self.hint.winfo_reqheight() + 2
+            if self.action_btn is not None:  # кнопка уведомления («Обновить»)
+                y += 6
+                cv.create_window(PAD - 4, y, window=self.action_btn, anchor="nw", tags="content")
+                self.update_idletasks()
+                y += self.action_btn.winfo_reqheight()
             y += PAD
         self.body_w, self.body_h = tw + 2 * PAD, y
         self.img_key = None
@@ -209,8 +216,16 @@ class Bubble(tk.Toplevel):
             self.canvas.config(width=w, height=h)
         self.geometry(f"{w}x{h}+{x}+{y}")
 
-    def _show(self, mode: str, status: str = "", hint: str = "", error: bool = False) -> None:
+    def _show(self, mode: str, status: str = "", hint: str = "", error: bool = False, action=None) -> None:
+        """action — (иконка, подпись, функция): одна кнопка под текстом уведомления."""
         self.mode = mode
+        if self.action_btn is not None:
+            self.action_btn.destroy()
+            self.action_btn = None
+        self.notice_action = action
+        if action:
+            icon, label, cb = action
+            self.action_btn = self._icon(self, icon, label, lambda: (self.hide(), cb()))
         self.status.config(text=status, fg=C["red"] if error else C["ink"])
         self.hint.config(text=hint)
         self._cancel_hide()
@@ -373,11 +388,12 @@ class Bubble(tk.Toplevel):
         self._schedule_hide(min(45.0, max(8.0, 4.0 + len(self.last_answer) / 15)))
         self.pet.handle_actions(r.get("actions"))
 
-    def say(self, text: str, hint: str = "", seconds: float = 60.0) -> bool:
-        """Уведомление от пса (напоминание, перезапуск мозга). False — облачко занято разговором."""
+    def say(self, text: str, hint: str = "", seconds: float = 60.0, action=None) -> bool:
+        """Уведомление от пса (напоминание, перезапуск мозга, обновление). action — (иконка, подпись, функция)
+        для кнопки. False — облачко занято разговором."""
         if self.busy or self.rec.active:
             return False
-        self._show("notice", text, hint)
+        self._show("notice", text, hint, action=action)
         self._schedule_hide(seconds)
         return True
 
