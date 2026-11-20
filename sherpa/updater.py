@@ -36,7 +36,7 @@ STATE_FILE = "sherpa-update.json"  # когда проверяли в после
 UA = "sherpa-pet-updater"
 # что обновление ZIP не перезаписывает, даже если такое окажется в архиве
 PROTECTED = (".venv", ".git", "brain/data", "brain/config.toml", "brain/models/gigaam-v3-e2e", VERSION_FILE,
-             STATE_FILE, "sherpa-state.txt")
+             STATE_FILE, "sherpa-state.txt", "sherpa-settings.json")
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 

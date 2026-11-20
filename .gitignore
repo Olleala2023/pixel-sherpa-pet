@@ -5,6 +5,8 @@ sherpa-state.txt
 # обновление: какая версия стоит (установка из ZIP) и когда проверяли
 .sherpa-version
 sherpa-update.json
+# размер и галочки меню пса
+sherpa-settings.json
 __pycache__/
 *.pyc
 .venv/

@@ -25,6 +25,7 @@ except ImportError:  # не Windows — просто без звука
 
 from PIL import Image, ImageTk
 
+from . import prefs
 from .smooth import upscale
 from .sprites import H, W, draw_chibi_frame
 
@@ -129,7 +130,11 @@ def pil_to_tk_photo(pil_img, master) -> "ImageTk.PhotoImage":
 
 
 class SherpaDesktopPet:
-    def __init__(self, scale: int = 3):
+    def __init__(self, scale: int | None = None):
+        """scale=None — размер из запомненных настроек (sherpa-settings.json), по умолчанию 3."""
+        self.prefs = prefs.load()
+        if scale is None:
+            scale = self.prefs["scale"]
         self.root = tk.Tk()
         self.root.title("Sherpa Pet")
         self.root.overrideredirect(True)
@@ -165,14 +170,14 @@ class SherpaDesktopPet:
         self.vy = 0.0          # px/с, плюс — вниз
         self.falling = False
         self.bounces = 0
-        self.sound_on = True
+        self.sound_on = self.prefs["sound"]
         self.last_tick = time.monotonic()
         # В базовом спрайте (flip_x=False) хвост слева, нос смотрит вправо.
         # Поэтому при движении влево (vx < 0) включаем отражение facing_left = True.
         self.facing_left = True
 
         self.state = "idle"
-        self.roaming = True
+        self.roaming = self.prefs["roaming"]
         self.frame = 0
         self.last_frame_time = time.monotonic()
         self.eyes_closed = False
@@ -253,10 +258,11 @@ class SherpaDesktopPet:
         self.var_roam = tk.BooleanVar(self.root, value=self.roaming)
         self.var_sound = tk.BooleanVar(self.root, value=self.sound_on)
         self.var_scale = tk.IntVar(self.root, value=self.scale)
-        self.var_bubble = tk.BooleanVar(self.root, value=True)
+        self.var_bubble = tk.BooleanVar(self.root, value=self.prefs["bubble"])
         self.menu.add_checkbutton(label="Гулять по панели", variable=self.var_roam, command=self.toggle_roaming)
         self.menu.add_checkbutton(label="Звуки", variable=self.var_sound, command=self.toggle_sound)
-        self.menu.add_checkbutton(label="Отвечать облачком (без окна)", variable=self.var_bubble)
+        self.menu.add_checkbutton(label="Отвечать облачком (без окна)", variable=self.var_bubble,
+                                  command=self.save_prefs)
         size_menu = tk.Menu(self.menu, tearoff=0)
         for s, label in ((2, "Мелкий (2x)"), (3, "Средний (3x)"), (4, "Крупный (4x, сглаженный)"),
                          (5, "Очень крупный (5x, сглаженный)")):
@@ -271,9 +277,16 @@ class SherpaDesktopPet:
         if not self.roaming and self.state == "walk":
             self.state = "idle"
             self._draw()
+        self.save_prefs()
 
     def toggle_sound(self):
         self.sound_on = self.var_sound.get()
+        self.save_prefs()
+
+    def save_prefs(self):
+        """Размер и галочки — в sherpa-settings.json: при следующем запуске пёс такой же."""
+        prefs.save({"scale": self.scale, "roaming": self.roaming, "sound": self.sound_on,
+                    "bubble": self.var_bubble.get()})
 
     def _clamp_position(self):
         min_x = float(self.work_left + 8)
@@ -285,6 +298,8 @@ class SherpaDesktopPet:
 
     def change_scale(self, new_scale: int):
         self.scale = new_scale
+        self.var_scale.set(new_scale)
+        self.save_prefs()
         self._build_sprites()
         self.canvas.config(width=W * self.scale, height=H * self.scale)
         left, top, right, bottom = get_work_area()
@@ -798,7 +813,8 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Sherpa Chibi Desktop Pet")
-    parser.add_argument("--scale", type=int, default=3, help="Sprite scale (2..5); 4 и 5 — со сглаженными углами")
+    parser.add_argument("--scale", type=int, default=None, choices=prefs.SCALES,
+                        help="Размер 2..5 (4 и 5 — со сглаженными углами); без него — запомненный, по умолчанию 3")
     parser.add_argument("--screenshot-test", action="store_true", help="Exit after 0.8s for testing")
     args = parser.parse_args()
 
