@@ -1,6 +1,7 @@
 """Конфиг мозга: brain/config.toml. Если файла нет — создаётся со значениями по умолчанию."""
 from __future__ import annotations
 
+import json
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,6 +32,7 @@ stt_idle_unload_s = 300
 brain_idle_exit_s = 3600
 audio_keep = 50
 max_audio_s = 60
+tools = true   # нейронке можно звать инструменты: время, счёт, напоминание, буфер обмена
 system_prompt = "{DEFAULT_SYSTEM_PROMPT}"
 
 [gigaam]
@@ -69,6 +71,7 @@ class Config:
     brain_idle_exit_s: float = 3600
     audio_keep: int = 50
     max_audio_s: float = 60
+    tools: bool = True
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
     gigaam_model: Path = field(default_factory=Path)
     gigaam_tokens: Path = field(default_factory=Path)
@@ -79,15 +82,28 @@ class Config:
 PROVIDERS = {"openrouter": "OpenRouter"}  # на будущее: сюда добавляются другие
 
 
-def save_settings(provider: str, model: str, path: Path = CONFIG_PATH) -> None:
-    """Меняет provider и model в config.toml, не трогая комментарии и секции ([gigaam] тоже имеет model)."""
+def save_settings(provider: str, model: str, path: Path | None = None, system_prompt: str | None = None) -> None:
+    """Меняет provider, model (и system_prompt, если задан) в config.toml, не трогая комментарии и секции
+    ([gigaam] тоже имеет model). Многострочное значение в тройных кавычках заменяется целиком."""
+    path = path or CONFIG_PATH  # берём в момент вызова: тесты подменяют CONFIG_PATH
     lines = path.read_text(encoding="utf-8").splitlines()
-    top_end = next((i for i, ln in enumerate(lines) if ln.lstrip().startswith("[")), len(lines))
     vals = {"provider": provider, "model": model}
-    for i in range(top_end):
-        key = lines[i].split("=", 1)[0].strip()
-        if key in vals and "=" in lines[i]:
+    if system_prompt is not None:
+        vals["system_prompt"] = system_prompt
+    i = 0
+    while i < len(lines) and not lines[i].lstrip().startswith("["):
+        key, eq, rest = lines[i].partition("=")
+        key = key.strip()
+        if eq and key in vals:
+            rest = rest.strip()
+            q = rest[:3]
+            if q in ('"""', "'''") and rest.count(q) < 2:  # многострочное: убираем строки до закрывающих кавычек
+                j = i + 1
+                while j < len(lines) and q not in lines[j]:
+                    j += 1
+                del lines[i + 1 : j + 1]
             lines[i] = f"{key} = {_toml_str(vals.pop(key))}"
+        i += 1
     at = next((i for i, ln in enumerate(lines) if not ln.lstrip().startswith("#")), len(lines))
     for key, v in vals.items():  # строки не было (старый конфиг) — добавляем после шапки-комментария
         lines.insert(at, f"{key} = {_toml_str(v)}")
@@ -103,7 +119,9 @@ def _abs(p: str | Path) -> Path:
 
 
 def _toml_str(v: str) -> str:
-    return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    """Однострочная строка TOML. Экраны JSON (кавычки, обратный слеш, перевод строки, табуляция, uXXXX)
+    TOML понимает так же, поэтому берём json.dumps; CR выкидываем."""
+    return json.dumps(v.replace(chr(13), ""), ensure_ascii=False)
 
 
 def load_config(path: Path = CONFIG_PATH) -> Config:

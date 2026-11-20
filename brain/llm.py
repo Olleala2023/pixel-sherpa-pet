@@ -6,14 +6,22 @@ import logging
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 
 from pydantic_ai import Agent
-from pydantic_ai.messages import ModelMessagesTypeAdapter, ModelResponse
+from pydantic_ai.messages import (
+    ModelMessagesTypeAdapter,
+    ModelResponse,
+    PartDeltaEvent,
+    PartStartEvent,
+    TextPart,
+    TextPartDelta,
+)
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
-from . import keystore
+from . import keystore, tools
 from .config import Config
 
 log = logging.getLogger("brain.llm")
@@ -34,6 +42,7 @@ class Answer:
     cost_usd: float | None
     llm_ms: int
     messages_json: str
+    actions: list[dict] = field(default_factory=list)  # что сделать псу: напоминания (tools.set_reminder)
 
 
 class Llm:
@@ -54,7 +63,8 @@ class Llm:
                 max_tokens=self.cfg.max_answer_tokens,
             )
             # instructions (а не system_prompt): подставляются в каждый запуск, даже с message_history
-            self._agent = Agent(model, model_settings=settings, instructions=self.cfg.system_prompt)
+            self._agent = Agent(model, model_settings=settings, instructions=self.cfg.system_prompt,
+                                deps_type=tools.Deps, tools=tools.TOOLS if self.cfg.tools else ())
         return self._agent
 
     def reset(self) -> None:
@@ -98,13 +108,25 @@ class Llm:
             log.warning("не получил прайс OpenRouter: %s", e)
             return None
 
-    async def ask(self, question: str, history_jsons: list[str]) -> Answer:
+    async def ask(self, question: str, history_jsons: list[str],
+                  on_delta: Callable[[str], None] | None = None) -> Answer:
+        """Вопрос нейронке. on_delta — получает куски текста ответа по мере генерации (для живого вывода)."""
         agent = self._get_agent()
         history = []
         for j in history_jsons:
             history.extend(ModelMessagesTypeAdapter.validate_json(j))
+        deps = tools.Deps()
+
+        async def stream(_ctx, events) -> None:
+            async for ev in events:
+                if isinstance(ev, PartStartEvent) and isinstance(ev.part, TextPart) and ev.part.content:
+                    on_delta(ev.part.content)
+                elif isinstance(ev, PartDeltaEvent) and isinstance(ev.delta, TextPartDelta) and ev.delta.content_delta:
+                    on_delta(ev.delta.content_delta)
+
         t0 = time.perf_counter()
-        result = await agent.run(question, message_history=history or None)
+        result = await agent.run(question, message_history=history or None, deps=deps,
+                                 event_stream_handler=stream if on_delta else None)
         llm_ms = int((time.perf_counter() - t0) * 1000)
         usage = result.usage  # в pydantic-ai 2.x — свойство (проверено на 2.68.0 в brain/spike.py)
         tin, tout = int(usage.input_tokens or 0), int(usage.output_tokens or 0)
@@ -123,4 +145,5 @@ class Llm:
             cost_usd=cost,
             llm_ms=llm_ms,
             messages_json=result.new_messages_json().decode("utf-8"),
+            actions=deps.actions,
         )

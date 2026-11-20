@@ -74,6 +74,9 @@ class Bubble(tk.Toplevel):
         self.last_answer = ""
         self.last_at = 0.0
         self.stt_meta: dict = {}
+        self.partial = ""
+        self.streaming = False
+        self.flush_job = None
         self.hide_job = None
         self.hover = False
         self.mode = "idle"  # listen / busy / answer / error
@@ -232,7 +235,7 @@ class Bubble(tk.Toplevel):
 
     def _hover(self, on: bool) -> None:
         self.hover = on
-        if self.mode in ("answer", "error"):
+        if self.mode in ("answer", "error", "notice"):
             if on:
                 self._cancel_hide()
                 self.attributes("-alpha", 1.0)
@@ -328,10 +331,36 @@ class Bubble(tk.Toplevel):
         q = question if len(question) <= 90 else question[:88] + "…"
         self._show("busy", "Думаю…", f"«{q}»")
         payload = {"session_id": self.session_id, "question": question, "source": "bubble", **(meta or {})}
-        self.worker.run(lambda: self.client.ask(payload), self._on_answer, self._error)
+        self.partial = ""
+        self.streaming = True
+        self.worker.run(lambda: self.client.ask_stream(payload, lambda t: self.worker.post(self._on_delta, t)),
+                        self._on_answer, self._error)
+
+    # --- ответ по мере генерации: текст копится, облачко перерисовывается не чаще раза в 0,15 с ---
+    def _on_delta(self, t: str) -> None:
+        if not self.streaming:
+            return
+        self.partial += t
+        if self.flush_job is None:
+            self.flush_job = self.after(150, self._flush)
+
+    def _flush(self) -> None:
+        self.flush_job = None
+        if not self.streaming or not self.partial.strip():
+            return
+        self.last_answer = self.partial.strip()
+        if self.mode != "answer":
+            self._pose(None)
+            self.pet.voice_pose = "think"  # пока пишет — думает
+        self._show("answer")
+        self.text.yview_moveto(1.0)  # видно, что дописывается
 
     def _on_answer(self, r: dict) -> None:
         self.busy = False
+        self.streaming = False
+        if self.flush_job is not None:
+            self.after_cancel(self.flush_job)
+            self.flush_job = None
         self.session_id = r.get("session_id")
         self.last_answer = (r.get("answer") or "").strip()
         self.last_at = time.monotonic()
@@ -342,6 +371,15 @@ class Bubble(tk.Toplevel):
         self._show("answer")
         # время на чтение: ~15 знаков в секунду, но не меньше 8 и не больше 45 с
         self._schedule_hide(min(45.0, max(8.0, 4.0 + len(self.last_answer) / 15)))
+        self.pet.handle_actions(r.get("actions"))
+
+    def say(self, text: str, hint: str = "", seconds: float = 60.0) -> bool:
+        """Уведомление от пса (напоминание, перезапуск мозга). False — облачко занято разговором."""
+        if self.busy or self.rec.active:
+            return False
+        self._show("notice", text, hint)
+        self._schedule_hide(seconds)
+        return True
 
     def _error(self, e: Exception | None, text: str | None = None) -> None:
         self.busy = False

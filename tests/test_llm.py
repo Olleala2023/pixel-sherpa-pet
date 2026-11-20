@@ -126,8 +126,9 @@ class FakeAgent:
     def __init__(self, cost):
         self.cost, self.calls = cost, []
 
-    async def run(self, question, message_history=None):
+    async def run(self, question, message_history=None, deps=None, event_stream_handler=None):
         self.calls.append((question, message_history))
+        self.deps, self.handler = deps, event_stream_handler
         return FakeResult(self.cost)
 
 

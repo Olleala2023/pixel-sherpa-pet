@@ -53,9 +53,7 @@ def paths(tmp_path, monkeypatch):
     monkeypatch.setattr(bconf, "DATA_DIR", data)
     monkeypatch.setattr(bconf, "CONFIG_PATH", cfg_path)
     monkeypatch.setattr(server, "DB_PATH", data / "brain.db")
-    # server вызывает save_settings(provider, model) с путём по умолчанию, зашитым при определении функции
-    orig = bconf.save_settings
-    monkeypatch.setattr(server, "save_settings", lambda p, m: orig(p, m, cfg_path))
+    # save_settings без пути берёт bconf.CONFIG_PATH в момент вызова — подмены выше достаточно
     return type("P", (), {"data": data, "audio": audio, "config": cfg_path, "root": tmp_path})
 
 
@@ -80,8 +78,12 @@ def llm_calls(monkeypatch):
     state = {"ask_calls": [], "check_calls": [], "ask_exc": None,
              "check_res": {"model_ok": True, "key_ok": True}, "answer": make_answer()}
 
-    async def fake_ask(self, question, history_jsons):
+    async def fake_ask(self, question, history_jsons, on_delta=None):
         state["ask_calls"].append((question, list(history_jsons)))
+        if on_delta:  # поток: ответ двумя кусками (до ошибки — тоже, как у настоящей нейронки)
+            text = state["answer"].text
+            on_delta(text[: len(text) // 2])
+            on_delta(text[len(text) // 2 :])
         if state["ask_exc"]:
             raise state["ask_exc"]
         return state["answer"]

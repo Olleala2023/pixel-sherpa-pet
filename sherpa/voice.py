@@ -101,6 +101,57 @@ class BrainClient:
         self.ensure_running()
         return self._req("/ask", json.dumps(payload).encode("utf-8"))
 
+    def ask_stream(self, payload: dict, on_delta) -> dict:
+        """Как ask, но куски ответа приходят в on_delta(текст) по мере генерации (вызывается в фоновом потоке).
+        Мозг старой версии без /ask/stream — обычный ask одним куском."""
+        self.ensure_running()
+        req = urllib.request.Request(self.url + "/ask/stream", data=json.dumps(payload).encode("utf-8"),
+                                     headers={"Content-Type": "application/json"})
+        try:
+            r = urllib.request.urlopen(req, timeout=120)
+        except urllib.error.HTTPError as e:
+            if e.code in (404, 405):
+                res = self.ask(payload)
+                on_delta(res.get("answer", ""))
+                return res
+            raise BrainError("http", f"Мозг ответил HTTP {e.code}") from None
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            raise BrainError("brain_down", f"Мозг не отвечает: {e}") from None
+        with r:
+            for raw in r:
+                if not raw.strip():
+                    continue
+                item = json.loads(raw)
+                if "delta" in item:
+                    on_delta(item["delta"])
+                elif "error" in item:
+                    raise BrainError(item["error"], item.get("message", "Ошибка мозга"))
+                elif item.get("done"):
+                    return item
+        raise BrainError("brain_down", "Мозг оборвал ответ на полуслове")
+
+    def restart(self) -> None:
+        """Перезапуск мозга (новый конфиг и код): /shutdown, ждём, пока замолчит, поднимаем заново.
+        Старый мозг без /shutdown завершаем по pid из /health — это наш же процесс."""
+        h = self.health()
+        if h:
+            try:
+                self._req("/shutdown", b"{}", timeout=3)
+            except BrainError as e:
+                if e.code != "http" or not h.get("pid"):
+                    raise
+                import os
+                import signal
+
+                os.kill(int(h["pid"]), signal.SIGTERM)
+            t_end = time.monotonic() + 10
+            while self.health(timeout=0.3) and time.monotonic() < t_end:
+                time.sleep(0.2)
+            if self.health(timeout=0.3):
+                raise BrainError("brain_down", "Мозг не завершился за 10 с — закройте pythonw.exe в диспетчере задач")
+        self.url = brain_url()  # порт мог поменяться в config.toml
+        self.ensure_running()
+
     def history(self, limit: int = 50) -> list[dict]:
         self.ensure_running()
         return self._req(f"/history?limit={limit}")
@@ -190,6 +241,10 @@ class _Worker:
                 self.q.put((on_ok, res))
 
         threading.Thread(target=body, daemon=True).start()
+
+    def post(self, cb, arg) -> None:
+        """Из фонового потока: вызвать cb(arg) в главном (куски потокового ответа)."""
+        self.q.put((cb, arg))
 
     def _poll(self) -> None:
         if not self.alive:

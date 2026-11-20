@@ -211,6 +211,14 @@ class SherpaDesktopPet:
         self.settings_window = None
         self.brain_client = None
         self.bubble = None  # облачко над псом (bubble.py): вопрос и ответ без окна
+        self.reminders: list[dict] = []  # {"at": time.time(), "text", "job"} — ставит нейронка (brain/tools.py)
+        self.restarting = False
+        try:
+            from .hotkey import GlobalHotkey
+
+            self.hotkey = GlobalHotkey()  # Ctrl+Alt+Space — спросить, не трогая мышь
+        except Exception:  # noqa: BLE001 — не Windows или клавиша занята: живём без неё
+            self.hotkey = None
 
         self.canvas.bind("<ButtonPress-1>", self.on_press)
         self.canvas.bind("<B1-Motion>", self.on_drag)
@@ -237,18 +245,22 @@ class SherpaDesktopPet:
 
     def _build_menu(self):
         self.menu = tk.Menu(self.root, tearoff=0)
-        self.menu.add_command(label="Спросить голосом… (двойной клик)", command=self.open_voice)
+        hk = f", {self.hotkey.combo}" if self.hotkey and self.hotkey.ok else ""
+        self.menu.add_command(label=f"Спросить голосом… (двойной клик{hk})", command=self.ask_voice)
         self.menu.add_command(label="История запросов…", command=self.open_history)
         self.menu.add_command(label="Настройки нейронки…", command=self.open_settings)
+        self.reminders_menu = tk.Menu(self.menu, tearoff=0, postcommand=self._fill_reminders_menu)
+        self.menu.add_cascade(label="Напоминания", menu=self.reminders_menu)
+        self.menu.add_command(label="Перезапустить мозг", command=self.restart_brain)
         self.menu.add_separator()
         # галочки показывают, что включено сейчас
         self.var_roam = tk.BooleanVar(self.root, value=self.roaming)
         self.var_sound = tk.BooleanVar(self.root, value=self.sound_on)
         self.var_scale = tk.IntVar(self.root, value=self.scale)
-        self.var_bubble = tk.BooleanVar(self.root, value=False)
+        self.var_bubble = tk.BooleanVar(self.root, value=True)
         self.menu.add_checkbutton(label="Гулять по панели", variable=self.var_roam, command=self.toggle_roaming)
         self.menu.add_checkbutton(label="Звуки", variable=self.var_sound, command=self.toggle_sound)
-        self.menu.add_checkbutton(label="Отвечать облачком (проба)", variable=self.var_bubble)
+        self.menu.add_checkbutton(label="Отвечать облачком (без окна)", variable=self.var_bubble)
         size_menu = tk.Menu(self.menu, tearoff=0)
         for s, label in ((2, "Мелкий (2x)"), (3, "Средний (3x)"), (4, "Крупный (4x)"), (5, "Очень крупный (5x)")):
             size_menu.add_radiobutton(label=label, variable=self.var_scale, value=s,
@@ -362,13 +374,91 @@ class SherpaDesktopPet:
         else:
             self.open_voice()
 
-    def ask_bubble(self):
-        """Вопрос облачком: двойной щелчок — запись, ещё щелчок — готово."""
+    def ask_voice(self):
+        """Горячая клавиша и пункт меню: облачком — запись/готово; окном — открыть и начать/закончить запись."""
+        if self.var_bubble.get():
+            self.ask_bubble()
+            return
+        self.open_voice()
+        if self.voice_window is not None:
+            self.voice_window.toggle_record()
+
+    # --- напоминания (их ставит нейронка инструментом set_reminder) ---
+    def handle_actions(self, actions):
+        for a in actions or ():
+            if a.get("type") == "reminder" and a.get("in_s"):
+                self.add_reminder(float(a["in_s"]), a.get("text") or "Напоминание")
+
+    def add_reminder(self, in_s: float, text: str):
+        r = {"at": time.time() + in_s, "text": text}
+        r["job"] = self.root.after(int(in_s * 1000), lambda: self._fire_reminder(r))
+        self.reminders.append(r)
+
+    def _fire_reminder(self, r):
+        if r not in self.reminders:
+            return
+        if not self._say(f"⏰ {r['text']}", "щёлкни ×, чтобы закрыть", 120.0):
+            r["job"] = self.root.after(5000, lambda: self._fire_reminder(r))  # облачко занято разговором
+            return
+        self.reminders.remove(r)
+        self.hold_pose("jump", 2.0)
+        if self.sound_on:
+            play_sound(SND_LAND)
+
+    def cancel_reminder(self, r):
+        if r in self.reminders:
+            self.root.after_cancel(r["job"])
+            self.reminders.remove(r)
+
+    def _fill_reminders_menu(self):
+        m = self.reminders_menu
+        m.delete(0, "end")
+        if not self.reminders:
+            m.add_command(label="Нет напоминаний. Скажите: «напомни через 10 минут…»", state="disabled")
+            return
+        for r in sorted(self.reminders, key=lambda x: x["at"]):
+            when = time.strftime("%H:%M", time.localtime(r["at"]))
+            text = r["text"] if len(r["text"]) <= 40 else r["text"][:39] + "…"
+            m.add_command(label=f"{when} — {text}  (отменить)", command=lambda r=r: self.cancel_reminder(r))
+
+    def _get_bubble(self):
         if self.bubble is None or not self.bubble.winfo_exists():
             from .bubble import Bubble
 
             self.bubble = Bubble(self, self._client())
-        self.bubble.toggle()
+        return self.bubble
+
+    def _say(self, text, hint="", seconds=8.0) -> bool:
+        return self._get_bubble().say(text, hint, seconds)
+
+    # --- перезапуск мозга: свежий config.toml и код без диспетчера задач ---
+    def restart_brain(self):
+        if self.restarting:
+            return
+        from .voice import _Worker, err_text
+
+        self.restarting = True
+        self._say("Перезапускаю мозг…", "", 30.0)
+        self.hold_pose("think", 30.0)
+        w = _Worker(self.root)
+
+        def done(_):
+            w.alive = False
+            self.restarting = False
+            self.hold_pose("wave", 2.0)
+            self._say("Мозг перезапущен ✓", "новый конфиг подхвачен", 5.0)
+
+        def fail(e):
+            w.alive = False
+            self.restarting = False
+            self.temp_override_until = 0.0
+            self._say(err_text(e), "", 10.0)
+
+        w.run(self._client().restart, done, fail)
+
+    def ask_bubble(self):
+        """Вопрос облачком: двойной щелчок — запись, ещё щелчок — готово."""
+        self._get_bubble().toggle()
 
     def _bubble_shown(self) -> bool:
         return self.bubble is not None and self.bubble.shown
@@ -590,6 +680,9 @@ class SherpaDesktopPet:
                         self.vx = -abs(self.vx)
                         self.facing_left = True
                     self._update_geometry()
+
+        if self.hotkey is not None and self.hotkey.pressed():
+            self.ask_voice()
 
         redraw = False
         if now - self.last_frame_time >= 0.22:

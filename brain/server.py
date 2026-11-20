@@ -9,14 +9,16 @@ import time
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 
+import json
+
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from . import keystore
 from . import llm as llm_mod
 from . import stt as stt_mod
-from .config import AUDIO_DIR, DB_PATH, PROVIDERS, Config, save_settings
+from .config import AUDIO_DIR, DB_PATH, DEFAULT_SYSTEM_PROMPT, PROVIDERS, Config, save_settings
 from .db import Db
 
 log = logging.getLogger("brain.server")
@@ -38,6 +40,7 @@ class SettingsIn(BaseModel):
     model: str
     api_key: str | None = None  # пусто — ключ не меняем
     clear_key: bool = False  # удалить сохранённый в Windows ключ
+    system_prompt: str | None = None  # None — не менять; пустая строка — вернуть стандартный
 
 
 class ApiError(Exception):
@@ -144,8 +147,8 @@ def create_app(cfg: Config) -> FastAPI:
             "method": r.method,
         }
 
-    @app.post("/ask")
-    async def ask(body: AskIn):
+    async def ask_core(body: AskIn, on_delta=None) -> dict:
+        """Общая часть /ask и /ask/stream: лимит, история, нейронка, запись в базу. Ошибки — ApiError."""
         brain.touch()
         question = body.question.strip()
         if not question:
@@ -171,7 +174,7 @@ def create_app(cfg: Config) -> FastAPI:
             )
         history = brain.db.session_messages(session_id, cfg.max_dialog_pairs)
         try:
-            a = await brain.llm.ask(question, history)
+            a = await brain.llm.ask(question, history, on_delta=on_delta)
         except llm_mod.NoApiKey:
             brain.db.insert(**base, status="error", error="no_api_key")
             raise ApiError(500, "no_api_key", "Нет ключа API — открой настройки (шестерёнка в окне Шерпы) и вставь ключ OpenRouter.")
@@ -208,13 +211,56 @@ def create_app(cfg: Config) -> FastAPI:
             "tokens_out": a.tokens_out,
             "cost_usd": a.cost_usd,
             "llm_ms": a.llm_ms,
+            "actions": a.actions,
         }
+
+    @app.post("/ask")
+    async def ask(body: AskIn):
+        return await ask_core(body)
+
+    @app.post("/ask/stream")
+    async def ask_stream(body: AskIn):
+        """Ответ по мере генерации: строки JSON (NDJSON). {"delta": "..."} — кусок текста;
+        последняя строка — {"done": true, ...поля как у /ask} или {"error": код, "message": текст}."""
+        q: asyncio.Queue = asyncio.Queue()
+
+        async def run() -> None:
+            try:
+                res = await ask_core(body, on_delta=lambda t: q.put_nowait({"delta": t}))
+                q.put_nowait({"done": True, **res})
+            except ApiError as e:
+                q.put_nowait({"error": e.code, "message": e.message})
+            except Exception as e:  # noqa: BLE001
+                log.exception("поток ответа")
+                q.put_nowait({"error": "internal", "message": f"Мозг сломался: {type(e).__name__}"})
+
+        async def lines():
+            task = asyncio.create_task(run())
+            try:
+                while True:
+                    item = await q.get()
+                    yield json.dumps(item, ensure_ascii=False) + "\n"
+                    if "done" in item or "error" in item:
+                        break
+            finally:
+                if not task.done():  # клиент ушёл — нейронку не ждём
+                    task.cancel()
+
+        return StreamingResponse(lines(), media_type="application/x-ndjson")
+
+    @app.post("/shutdown")
+    async def shutdown():
+        """Перезапуск из меню пса: мозг выходит, пёс поднимет его заново со свежим конфигом и кодом."""
+        log.info("выход по запросу /shutdown")
+        if brain.should_exit:
+            asyncio.get_running_loop().call_later(0.2, brain.should_exit)
+        return {"ok": True, "pid": os.getpid()}
 
     def settings_view() -> dict:
         key, src = keystore.get_key(cfg.provider)
         hint = ("…" + key[-4:]) if key and len(key) >= 12 else ("•••" if key else None)  # ключ целиком не отдаём
         return {"provider": cfg.provider, "providers": PROVIDERS, "model": cfg.model, "key_source": src,
-                "key_hint": hint}
+                "key_hint": hint, "system_prompt": cfg.system_prompt, "default_system_prompt": DEFAULT_SYSTEM_PROMPT}
 
     @app.get("/settings")
     async def get_settings():
@@ -259,11 +305,19 @@ def create_app(cfg: Config) -> FastAPI:
             keystore.delete_key(provider)
         if new_key:
             keystore.set_key(provider, new_key)
-        save_settings(provider, model)
+        prompt = None
+        if body.system_prompt is not None:
+            prompt = body.system_prompt.strip() or DEFAULT_SYSTEM_PROMPT
+            if len(prompt) > 4000:
+                raise ApiError(400, "bad_prompt", "Характер слишком длинный: больше 4000 знаков.")
+        save_settings(provider, model, system_prompt=prompt)
         cfg.provider, cfg.model = provider, model
+        if prompt is not None:
+            cfg.system_prompt = prompt
         brain.llm.reset()
-        log.info("настройки: провайдер %s, модель %s, ключ %s", provider, model,
-                 "новый" if new_key else ("удалён" if body.clear_key else "прежний"))
+        log.info("настройки: провайдер %s, модель %s, ключ %s, промпт %s", provider, model,
+                 "новый" if new_key else ("удалён" if body.clear_key else "прежний"),
+                 "прежний" if prompt is None else f"{len(prompt)} знаков")
         out = settings_view()
         out["checked"] = res
         return out

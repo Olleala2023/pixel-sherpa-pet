@@ -409,20 +409,33 @@ class Chat(tk.Canvas):
         tw = min(avail, self.style.natural_width(spans))
         th = self._height(spans, tw)
         bw, bh = tw + 2 * self.PADX, th + 2 * self.PADY
+        used_before = self.used
         y = self.used + (self.GAP if self.used else 0)
         bx = self.w - bw if you else 0
         bg = C["you_bg"] if you else C["dog_bg"]
         img = round_image(bw, bh, self.R, bg, C["card"], tail="br" if you else "bl")
         self.imgs.append(img)
-        self.create_image(bx, y, image=img, anchor="nw")
+        tag = f"b{len(self.imgs)}"
+        self.create_image(bx, y, image=img, anchor="nw", tags=tag)
         t = self._new_text(self, bg)
         self.style.insert(t, spans)
         self._bind_bubble(t, text)
-        self.create_window(bx + self.PADX, y + self.PADY, window=t, anchor="nw", width=tw, height=th)
+        self.create_window(bx + self.PADX, y + self.PADY, window=t, anchor="nw", width=tw, height=th, tags=tag)
         self.texts.append(t)
+        self._last = (tag, t, used_before)
         self.used = y + bh
         self.configure(scrollregion=(0, 0, self.w, self.used))
         return y
+
+    def replace_last(self, who: str, text: str) -> int:
+        """Заменяет последний пузырь (ответ, который дописывается по мере генерации)."""
+        tag, t, used_before = self._last
+        self.delete(tag)
+        t.destroy()
+        self.texts.remove(t)
+        self.imgs.pop()
+        self.used = used_before
+        return self.add(who, text)
 
     # --- выделение и копирование ---
     def _bind_bubble(self, t: tk.Text, raw: str) -> None:
@@ -680,13 +693,43 @@ class VoiceWindow(CardWindow):
         self._pose("think")
         self.set_busy(True)
         self.set_subtitle("Думаю…")
-        self.worker.run(lambda: self.client.ask(payload), self._on_answer, self._on_error)
+        self.partial, self.streamed, self.flush_job = "", False, None
+        self.worker.run(lambda: self.client.ask_stream(payload, lambda t: self.worker.post(self._on_delta, t)),
+                        self._on_answer, self._on_error)
+
+    # --- ответ по мере генерации: пузырь перерисовывается не чаще раза в 0,15 с ---
+    def _on_delta(self, t: str) -> None:
+        if not self.busy:
+            return
+        self.partial += t
+        if self.flush_job is None:
+            self.flush_job = self.after(150, self._flush)
+
+    def _flush(self) -> None:
+        self.flush_job = None
+        if not self.busy or not self.partial.strip():
+            return
+        self._show_dog(self.partial.strip())
+        self.set_subtitle("Пишу ответ…")
+
+    def _show_dog(self, text: str) -> None:
+        if self.streamed:
+            top = self.chat.replace_last("dog", text)
+            self._grow_chat()
+            self.chat.yview_moveto(1.0 if self.busy else top / max(1, self.chat.used))
+        else:
+            self.streamed = True
+            self.append("dog", text)
 
     def _on_answer(self, r: dict) -> None:
+        if self.flush_job is not None:
+            self.after_cancel(self.flush_job)
+            self.flush_job = None
         self.set_busy(False)
         self.session_id = r.get("session_id")
         self.last_answer = r.get("answer", "")
-        self.append("dog", self.last_answer)
+        self._show_dog(self.last_answer.strip())
+        self.pet.handle_actions(r.get("actions"))
         self._pose(None)
         self.set_pose("wave")
         self.pet.hold_pose("wave", 3.0)
@@ -974,6 +1017,23 @@ class SettingsWindow(CardWindow):
         self._link_line("Где взять — ", "openrouter.ai/keys", "https://openrouter.ai/keys", parent=row)
         self.del_link = LinkButton(row, "Удалить сохранённый ключ", self.clear_key)
 
+        self._label("Характер (как отвечает Шерпа)")
+        self.prompt = tk.Text(self.body, height=4, wrap="word", font=(UI, 9), bg=C["white"], fg=C["ink"],
+                              relief="flat", bd=0, highlightthickness=0, insertbackground=C["blue_dk"], undo=True)
+        pbox = Panel(self.body, C["white"], C["card"], r=10, outline=C["border"], inner=self.prompt, pad=8,
+                     height=4 * 17 + 16)
+        self.prompt.lift(pbox)
+        pbox.pack(fill="x")
+        self.prompt.bind("<Button-1>", lambda ev: self.focus_force())
+        clipboard_keys(self.prompt)
+        self.default_prompt = ""
+        self.prompt_loaded = False  # мозг старой версии характер не отдаёт — тогда и не шлём
+        row_p = tk.Frame(self.body, bg=C["card"])
+        row_p.pack(fill="x")
+        tk.Label(row_p, text="Пустое поле — стандартный характер", bg=C["card"], fg=C["soft"],
+                 font=(UI, 8)).pack(side="left", pady=(3, 0))
+        LinkButton(row_p, "Вернуть стандартный", self._prompt_default).pack(side="right")
+
         self._label("Расход")
         self.spend = tk.Label(self.body, text="Загружаю…", bg=C["card"], fg=C["ink"], font=(UI, 9), anchor="w",
                               justify="left", width=1, wraplength=self.WIDTH - 2 * INSET - 4)
@@ -1048,7 +1108,17 @@ class SettingsWindow(CardWindow):
         self.model.delete(0, "end")
         self.model.insert(0, st.get("model", ""))
         self._key_state(st.get("key_source"), st.get("key_hint"))
+        if "system_prompt" in st:
+            self.prompt_loaded = True
+            self.default_prompt = st.get("default_system_prompt") or ""
+            self.prompt.delete("1.0", "end")
+            self.prompt.insert("1.0", st["system_prompt"])
+            self.prompt.edit_reset()
         self.set_subtitle("Нейронка для справки")
+
+    def _prompt_default(self) -> None:
+        self.prompt.delete("1.0", "end")
+        self.prompt.insert("1.0", self.default_prompt)
 
     def _fill_stats(self, st: dict) -> None:
         def one(title, s):
@@ -1119,8 +1189,11 @@ class SettingsWindow(CardWindow):
         return next((k for k, v in self.providers.items() if v == name), "openrouter")
 
     def _payload(self, clear_key: bool = False) -> dict:
-        return {"provider": self._provider_id(), "model": self.model.get().strip(),
-                "api_key": self._key_value() or None, "clear_key": clear_key}
+        p = {"provider": self._provider_id(), "model": self.model.get().strip(),
+             "api_key": self._key_value() or None, "clear_key": clear_key}
+        if self.prompt_loaded:
+            p["system_prompt"] = self.prompt.get("1.0", "end").strip()
+        return p
 
     def _busy(self, on: bool) -> None:
         self.save_btn.set_enabled(not on)
@@ -1172,6 +1245,9 @@ class SettingsWindow(CardWindow):
         self._busy(False)
         self._key_clear()
         self._key_state(st.get("key_source"), st.get("key_hint"))
+        if self.prompt_loaded and "system_prompt" in st:  # пустое стало стандартным — покажем, что сохранилось
+            self.prompt.delete("1.0", "end")
+            self.prompt.insert("1.0", st["system_prompt"])
         text, good = self._verdict(st.get("checked") or {}, bool(st.get("key_source")))
         self.set_subtitle(f"Сохранено · {text}", error=not good, ok=good)
 
