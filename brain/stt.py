@@ -45,6 +45,8 @@ def decode_wav(data: bytes) -> np.ndarray:
         raise BadAudio(f"не WAV: {e}") from e
     if sw != 2:
         raise BadAudio(f"нужен PCM16, а тут {sw * 8} бит")
+    if len(frames) % (sw * max(1, ch)):  # оборвана посреди сэмпла (недокачанный файл)
+        raise BadAudio("запись оборвана посреди сэмпла")
     x = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
     if ch > 1:
         x = x.reshape(-1, ch).mean(axis=1)

@@ -210,6 +210,7 @@ class SherpaDesktopPet:
         self.history_window = None
         self.settings_window = None
         self.brain_client = None
+        self.bubble = None  # облачко над псом (bubble.py): вопрос и ответ без окна
 
         self.canvas.bind("<ButtonPress-1>", self.on_press)
         self.canvas.bind("<B1-Motion>", self.on_drag)
@@ -244,8 +245,10 @@ class SherpaDesktopPet:
         self.var_roam = tk.BooleanVar(self.root, value=self.roaming)
         self.var_sound = tk.BooleanVar(self.root, value=self.sound_on)
         self.var_scale = tk.IntVar(self.root, value=self.scale)
+        self.var_bubble = tk.BooleanVar(self.root, value=False)
         self.menu.add_checkbutton(label="Гулять по панели", variable=self.var_roam, command=self.toggle_roaming)
         self.menu.add_checkbutton(label="Звуки", variable=self.var_sound, command=self.toggle_sound)
+        self.menu.add_checkbutton(label="Отвечать облачком (проба)", variable=self.var_bubble)
         size_menu = tk.Menu(self.menu, tearoff=0)
         for s, label in ((2, "Мелкий (2x)"), (3, "Средний (3x)"), (4, "Крупный (4x)"), (5, "Очень крупный (5x)")):
             size_menu.add_radiobutton(label=label, variable=self.var_scale, value=s,
@@ -336,6 +339,9 @@ class SherpaDesktopPet:
     def _click_reaction(self):
         """Одиночный клик — радуется или машет лапой (даже если выбрана ручная поза)."""
         self.click_job = None
+        if self.bubble is not None and self.bubble.recording:  # щелчок во время записи — «готово»
+            self.bubble.stop_record()
+            return
         self.hold_pose(random.choice(["jump", "wave", "look"]), 3.0)
 
     def hold_pose(self, st, seconds):
@@ -351,7 +357,21 @@ class SherpaDesktopPet:
             self.root.after_cancel(self.click_job)
             self.click_job = None
         self.dragging = False
-        self.open_voice()
+        if self.var_bubble.get():
+            self.ask_bubble()
+        else:
+            self.open_voice()
+
+    def ask_bubble(self):
+        """Вопрос облачком: двойной щелчок — запись, ещё щелчок — готово."""
+        if self.bubble is None or not self.bubble.winfo_exists():
+            from .bubble import Bubble
+
+            self.bubble = Bubble(self, self._client())
+        self.bubble.toggle()
+
+    def _bubble_shown(self) -> bool:
+        return self.bubble is not None and self.bubble.shown
 
     def _client(self):
         from .voice import BrainClient
@@ -406,6 +426,8 @@ class SherpaDesktopPet:
 
     def _update_geometry(self):
         self.root.geometry(f"{W * self.scale}x{H * self.scale}+{int(self.x)}+{int(self.y)}")
+        if self._bubble_shown():
+            self.bubble.follow()
 
     def _step_blink(self, now):
         if self.state in ("sleep", "jump"):
@@ -539,7 +561,7 @@ class SherpaDesktopPet:
                         self.state = "wave"
                         self.state_until = now + 2.2
                     elif now >= self.state_until:
-                        if self.roaming:
+                        if self.roaming and not self._bubble_shown():
                             self.state = random.choices(
                                 ["idle", "walk", "wave", "think"],
                                 weights=[40, 38, 12, 10],
@@ -553,6 +575,8 @@ class SherpaDesktopPet:
                             # При движении влево (vx < 0) отражаем спрайт (facing_left = True)
                             self.facing_left = self.vx < 0
 
+                if self.state == "walk" and self._bubble_shown():
+                    self.state = "idle"
                 if self.state == "walk" and self.roaming:
                     self.x += self.vx
                     min_x = self.work_left + 16
