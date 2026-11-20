@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
+import wave
 import os
 import secrets
 import time
@@ -11,6 +13,7 @@ from datetime import date, datetime, timedelta
 
 import json
 
+import numpy as np
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
@@ -23,6 +26,7 @@ from .db import Db
 
 log = logging.getLogger("brain.server")
 MAX_BODY = 4 * 1024 * 1024
+LIVE_TTL_S = 120  # живая запись без новых порций дольше — брошена
 
 
 class AskIn(BaseModel):
@@ -55,6 +59,7 @@ class Brain:
         self.stt = stt_mod.Stt(cfg)
         self.llm = llm_mod.Llm(cfg)
         self.stt_lock = asyncio.Lock()
+        self.live: dict[str, stt_mod.LiveSession] = {}  # живые записи: /listen
         self.last_request = time.monotonic()
         self.should_exit = None  # колбэк из __main__: остановить uvicorn
 
@@ -73,7 +78,10 @@ class Brain:
     async def housekeeping(self) -> None:
         while True:
             await asyncio.sleep(2)
-            if not self.stt_lock.locked():
+            for lid, s in list(self.live.items()):  # пёс пропал посреди записи — сессию выкидываем
+                if time.monotonic() - s.last_used > LIVE_TTL_S:
+                    self.live.pop(lid, None)
+            if not self.stt_lock.locked() and not self.live:
                 self.stt.maybe_unload()
             idle = time.monotonic() - self.last_request
             if self.cfg.brain_idle_exit_s > 0 and idle > self.cfg.brain_idle_exit_s and self.should_exit:
@@ -109,6 +117,93 @@ def create_app(cfg: Config) -> FastAPI:
             "pid": os.getpid(),
         }
 
+    def check_model() -> None:
+        if not (cfg.gigaam_model.exists() and cfg.gigaam_tokens.exists()):
+            raise ApiError(
+                503, "no_model",
+                "Нет модели распознавания речи. Скачайте её командой python tools/download_model.py "
+                "(файлы model.int8.onnx и tokens.txt в brain/models/gigaam-v3-e2e/) и повторите."
+            )
+
+    def save_audio(wav: bytes) -> str:
+        audio_id = datetime.now().strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(2)
+        (AUDIO_DIR / f"{audio_id}.wav").write_bytes(wav)
+        brain.rotate_audio()
+        return audio_id
+
+    # --- живая запись: звук порциями во время записи, текст по кускам между паузами ---
+    @app.post("/listen")
+    async def listen_start():
+        """Начало записи. Сразу грузим модель речи — пока человек говорит, она успеет загрузиться."""
+        brain.touch()
+        check_model()
+        lid = secrets.token_hex(6)
+        brain.live[lid] = await asyncio.to_thread(stt_mod.LiveSession, brain.stt)
+
+        async def preload() -> None:
+            try:
+                async with brain.stt_lock:
+                    await asyncio.to_thread(brain.stt.ensure_loaded)
+            except Exception:  # noqa: BLE001 — ошибка всплывёт при распознавании
+                log.exception("не загрузил модель речи заранее")
+
+        asyncio.create_task(preload())
+        return {"live_id": lid, "sample_rate": stt_mod.SR}
+
+    def live_session(lid: str) -> stt_mod.LiveSession:
+        s = brain.live.get(lid)
+        if s is None:
+            raise ApiError(404, "no_live", "Запись потерялась (мозг перезапускался?) — запишите ещё раз.")
+        return s
+
+    def pcm(body: bytes):
+        if len(body) % 2:
+            raise ApiError(400, "bad_audio", "Порция звука оборвана посреди сэмпла.")
+        return np.frombuffer(body, dtype=np.int16).astype(np.float32) / 32768.0
+
+    @app.post("/listen/{lid}")
+    async def listen_chunk(lid: str, request: Request):
+        """Порция звука: PCM16, 16 кГц, моно. Ответ — тексты кусков, которые стали готовы."""
+        brain.touch()
+        s = live_session(lid)
+        x = pcm(await request.body())
+        if (s.n + len(x)) / stt_mod.SR > cfg.max_audio_s + 0.5:
+            raise ApiError(413, "audio_too_long", f"Можно не больше {cfg.max_audio_s:.0f} с.")
+        try:
+            async with brain.stt_lock:
+                new = await asyncio.to_thread(s.accept, x)
+        except Exception as e:  # noqa: BLE001
+            log.exception("ошибка живого распознавания")
+            brain.live.pop(lid, None)
+            raise ApiError(500, "stt_failed", f"Распознавание сломалось: {e}")
+        return {"new": new, "text": s.text}
+
+    @app.post("/listen/{lid}/finish")
+    async def listen_finish(lid: str, request: Request):
+        """Остаток звука и конец записи. Ответ — как у /transcribe, плюс тексты последних кусков."""
+        brain.touch()
+        s = live_session(lid)
+        x = pcm(await request.body())
+        try:
+            async with brain.stt_lock:
+                r, new = await asyncio.to_thread(s.finish, x)
+        except Exception as e:  # noqa: BLE001
+            log.exception("ошибка живого распознавания")
+            raise ApiError(500, "stt_failed", f"Распознавание сломалось: {e}")
+        finally:
+            brain.live.pop(lid, None)
+        audio = s._audio()
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(stt_mod.SR)
+            w.writeframes((np.clip(audio, -1, 1) * 32767).astype(np.int16).tobytes())
+        audio_id = save_audio(buf.getvalue())
+        brain.touch()
+        return {"audio_id": audio_id, "text": r.text, "new": new, "audio_sec": round(r.audio_sec, 2),
+                "stt_ms": r.stt_ms, "segments": r.segments, "method": r.method}
+
     @app.post("/transcribe")
     async def transcribe(request: Request):
         brain.touch()
@@ -122,15 +217,8 @@ def create_app(cfg: Config) -> FastAPI:
         sec = len(x) / stt_mod.SR
         if sec > cfg.max_audio_s + 0.5:
             raise ApiError(413, "audio_too_long", f"Запись {sec:.0f} с, а можно не больше {cfg.max_audio_s:.0f} с.")
-        if not (cfg.gigaam_model.exists() and cfg.gigaam_tokens.exists()):
-            raise ApiError(
-                503, "no_model",
-                "Нет модели распознавания речи. Скачайте её командой python tools/download_model.py "
-                "(файлы model.int8.onnx и tokens.txt в brain/models/gigaam-v3-e2e/) и повторите."
-            )
-        audio_id = datetime.now().strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(2)
-        (AUDIO_DIR / f"{audio_id}.wav").write_bytes(body)
-        brain.rotate_audio()
+        check_model()
+        audio_id = save_audio(body)
         try:
             async with brain.stt_lock:
                 r = await asyncio.to_thread(brain.stt.transcribe, x)

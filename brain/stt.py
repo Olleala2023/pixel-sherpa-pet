@@ -105,8 +105,8 @@ class Stt:
         if self.rec is not None and time.monotonic() - self.last_used > self.cfg.stt_idle_unload_s:
             self.unload()
 
-    def _vad_segments(self, x: np.ndarray) -> list[np.ndarray] | None:
-        """Куски речи по Silero VAD; None — VAD недоступен."""
+    def make_vad(self):
+        """Потоковый Silero VAD (sherpa-onnx) с настройками из [vad]; None — VAD недоступен."""
         v = self.cfg.vad
         if self.vad_ok is False:
             return None
@@ -130,27 +130,32 @@ class Stt:
             self.vad_ok = False
             return None
         self.vad_ok = True
-        spans: list[tuple[int, int]] = []
+        return vad
 
-        def drain() -> None:
-            while not vad.empty():
-                spans.append((vad.front.start, vad.front.start + len(vad.front.samples)))
-                vad.pop()
-
+    def _vad_segments(self, x: np.ndarray) -> list[np.ndarray] | None:
+        """Куски речи по Silero VAD для готовой записи; None — VAD недоступен.
+        Тот же разрезчик, что у живой сессии: запись подаётся окнами по порядку."""
+        vad = self.make_vad()
+        if vad is None:
+            return None
+        cut = Cutter(vad)
         for i in range(0, len(x), VAD_WINDOW):
-            vad.accept_waveform(x[i : i + VAD_WINDOW])
-            drain()
-        vad.flush()
-        drain()
-        # Silero режет вплотную к речи и съедает тихие первые слова («ну») — берём поля из исходной записи
-        out, prev_end = [], 0
-        for a, b in sorted(spans):
-            a = max(prev_end, a - SEG_PAD, 0)
-            b = min(len(x), b + SEG_PAD)
-            if b > a:
-                out.append(x[a:b])
-                prev_end = b
-        return out
+            cut.feed(x[i : i + VAD_WINDOW])
+        spans = cut.spans() + cut.flush()
+        return pad_spans(x, spans, [0])
+
+    def ensure_loaded(self) -> None:
+        if self.rec is None:
+            self._load()
+        self.last_used = time.monotonic()
+
+    def decode(self, seg: np.ndarray) -> str:
+        """Один кусок речи → текст. Модель должна быть загружена (ensure_loaded)."""
+        st = self.rec.create_stream()
+        st.accept_waveform(SR, seg)
+        self.rec.decode_stream(st)
+        self.last_used = time.monotonic()
+        return st.result.text.strip()
 
     def transcribe(self, x: np.ndarray) -> SttResult:
         """Блокирующий вызов: звать из пула потоков под замком."""
@@ -163,17 +168,122 @@ class Stt:
             segs, method = quiet_split(x), "quiet-split"
         if not segs:
             return SttResult("", audio_sec, int((time.perf_counter() - t0) * 1000), 0, "empty")
-        if self.rec is None:
-            self._load()
-        texts = []
-        for s in segs:
-            st = self.rec.create_stream()
-            st.accept_waveform(SR, s)
-            self.rec.decode_stream(st)
-            t = st.result.text.strip()
-            if t:
-                texts.append(t)
-        self.last_used = time.monotonic()
+        self.ensure_loaded()
+        texts = [t for t in (self.decode(s) for s in segs) if t]
         ms = int((time.perf_counter() - t0) * 1000)
         log.info("распознано %.1f с аудио, %d кусков (%s), %d мс", audio_sec, len(segs), method, ms)
         return SttResult(" ".join(texts), audio_sec, ms, len(segs), method)
+
+
+class Cutter:
+    """Обёртка потокового VAD: принимает звук любыми порциями, отдаёт границы готовых кусков речи
+    (start, end) в отсчётах от начала записи. Кусок готов, когда после него была пауза min_silence_s
+    или он дорос до max_speech_s."""
+
+    def __init__(self, vad):
+        self.vad = vad
+        self.tail = np.zeros(0, dtype=np.float32)  # неполное окно VAD ждёт продолжения
+
+    def feed(self, x: np.ndarray) -> None:
+        x = np.concatenate([self.tail, x]) if len(self.tail) else x
+        n = len(x) - len(x) % VAD_WINDOW
+        for i in range(0, n, VAD_WINDOW):
+            self.vad.accept_waveform(x[i : i + VAD_WINDOW])
+        self.tail = x[n:].copy()
+
+    def spans(self) -> list[tuple[int, int]]:
+        out = []
+        while not self.vad.empty():
+            out.append((self.vad.front.start, self.vad.front.start + len(self.vad.front.samples)))
+            self.vad.pop()
+        return out
+
+    def flush(self) -> list[tuple[int, int]]:
+        """Конец записи: дописываем неполное окно и забираем последний кусок."""
+        if len(self.tail):
+            self.vad.accept_waveform(self.tail)
+            self.tail = np.zeros(0, dtype=np.float32)
+        self.vad.flush()
+        return self.spans()
+
+
+def pad_spans(x: np.ndarray, spans: list[tuple[int, int]], prev_end: list[int]) -> list[np.ndarray]:
+    """Silero режет вплотную к речи и съедает тихие первые слова («ну») — берём поля из исходной записи.
+    prev_end — [конец прошлого куска]: куски не перекрываются (список, чтобы живая сессия его помнила)."""
+    out = []
+    for a, b in sorted(spans):
+        a = max(prev_end[0], a - SEG_PAD, 0)
+        b = min(len(x), b + SEG_PAD)
+        if b > a:
+            out.append(x[a:b])
+            prev_end[0] = b
+    return out
+
+
+class LiveSession:
+    """Живое распознавание: звук приходит порциями во время записи, каждый кусок речи распознаётся,
+    как только VAD увидел после него паузу. Итог совпадает с transcribe() той же записи: те же окна VAD,
+    те же куски. Без VAD — копим звук и распознаём всё в конце (transcribe).
+
+    Методы блокирующие: сервер зовёт их из пула потоков под stt_lock."""
+
+    def __init__(self, stt: Stt):
+        self.stt = stt
+        self.vad = stt.make_vad()
+        self.cut = Cutter(self.vad) if self.vad is not None else None
+        self.parts: list[np.ndarray] = []
+        self.n = 0
+        self.prev_end = [0]
+        self.texts: list[str] = []
+        self.segments = 0
+        self.stt_ms = 0
+        self.last_used = time.monotonic()
+
+    def _audio(self) -> np.ndarray:
+        if len(self.parts) > 1:
+            self.parts = [np.concatenate(self.parts)]
+        return self.parts[0] if self.parts else np.zeros(0, dtype=np.float32)
+
+    def _decode_spans(self, spans) -> list[str]:
+        if not spans:
+            return []
+        t0 = time.perf_counter()
+        segs = pad_spans(self._audio(), spans, self.prev_end)
+        self.stt.ensure_loaded()
+        new = [t for t in (self.stt.decode(s) for s in segs) if t]
+        self.segments += len(segs)
+        self.stt_ms += int((time.perf_counter() - t0) * 1000)
+        self.texts.extend(new)
+        return new
+
+    def accept(self, x: np.ndarray) -> list[str]:
+        """Новая порция звука; возвращает тексты кусков, которые стали готовы."""
+        self.last_used = time.monotonic()
+        if len(x) == 0:
+            return []
+        self.parts.append(x.astype(np.float32, copy=False))
+        self.n += len(x)
+        if self.cut is None:
+            return []
+        self.cut.feed(x)
+        return self._decode_spans(self.cut.spans())
+
+    def finish(self, x: np.ndarray | None = None) -> tuple[SttResult, list[str]]:
+        """Остаток звука и конец записи → (итог как у transcribe, тексты последних кусков)."""
+        new = self.accept(x) if x is not None and len(x) else []
+        audio = self._audio()
+        sec = len(audio) / SR
+        if self.cut is None:  # без VAD: как раньше, целиком
+            r = self.stt.transcribe(audio)
+            return r, [r.text] if r.text else []
+        t0 = time.perf_counter()
+        new += self._decode_spans(self.cut.flush())
+        tail_ms = int((time.perf_counter() - t0) * 1000)
+        log.info("живое распознавание: %.1f с аудио, %d кусков, %d мс на распознавание, после записи — %d мс",
+                 sec, self.segments, self.stt_ms, tail_ms)
+        method = "vad-live" if self.segments else "empty"
+        return SttResult(" ".join(self.texts), sec, tail_ms, self.segments, method), new
+
+    @property
+    def text(self) -> str:
+        return " ".join(self.texts)

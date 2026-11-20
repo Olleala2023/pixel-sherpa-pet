@@ -101,6 +101,17 @@ class BrainClient:
         self.ensure_running()
         return self._req("/ask", json.dumps(payload).encode("utf-8"))
 
+    # --- живая запись (/listen): звук порциями, текст по кускам между паузами ---
+    def listen_start(self) -> str:
+        self.ensure_running()
+        return self._req("/listen", b"{}", timeout=15)["live_id"]
+
+    def listen_chunk(self, lid: str, pcm: bytes) -> dict:
+        return self._req(f"/listen/{lid}", pcm, "application/octet-stream", timeout=60)
+
+    def listen_finish(self, lid: str, pcm: bytes) -> dict:
+        return self._req(f"/listen/{lid}/finish", pcm, "application/octet-stream", timeout=120)
+
     def ask_stream(self, payload: dict, on_delta) -> dict:
         """Как ask, но куски ответа приходят в on_delta(текст) по мере генерации (вызывается в фоновом потоке).
         Мозг старой версии без /ask/stream — обычный ask одним куском."""
@@ -224,6 +235,60 @@ class Recorder:
             w.writeframes(b"".join(self.chunks))
         self.chunks = []
         return buf.getvalue()
+
+
+class LiveUpload:
+    """Пока идёт запись, раз в SEND_S отправляет мозгу новый звук; когда мозг распознал очередной кусок
+    (после паузы в речи), зовёт on_text(весь текст на сейчас) — из фонового потока.
+
+    finish(wav) дожидается отправки и возвращает итог как у /transcribe. Мозг старой версии без /listen
+    или потерянная запись — распознаём готовый WAV по-старому, одним запросом."""
+
+    SEND_S = 0.4
+
+    def __init__(self, client: BrainClient, rec: Recorder, on_text):
+        self.client, self.rec, self.on_text = client, rec, on_text
+        self.lid: str | None = None
+        self.sent = 0  # сколько байт PCM уже у мозга
+        self.error: Exception | None = None
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True, name="live-upload")
+        self._thread.start()
+
+    def _run(self) -> None:
+        try:
+            self.lid = self.client.listen_start()
+            while not self._stop.wait(self.SEND_S):
+                self._send(b"".join(list(self.rec.chunks)))
+        except Exception as e:  # noqa: BLE001 — запись идёт дальше, в конце распознаем целиком
+            self.error = e
+
+    def _send(self, pcm: bytes) -> None:
+        new = pcm[self.sent :]
+        if not new or self.lid is None:
+            return
+        r = self.client.listen_chunk(self.lid, new)
+        self.sent += len(new)
+        if r.get("new"):
+            self.on_text(r.get("text", ""))
+
+    def cancel(self) -> None:
+        self._stop.set()
+
+    def finish(self, wav: bytes) -> dict:
+        """Звать в фоновом потоке после Recorder.stop(): wav — вся запись."""
+        self._stop.set()
+        self._thread.join(timeout=60)
+        if self.lid is None or self.error is not None:
+            return self.client.transcribe(wav)
+        with wave.open(io.BytesIO(wav), "rb") as w:
+            pcm = w.readframes(w.getnframes())
+        try:
+            return self.client.listen_finish(self.lid, pcm[self.sent :])
+        except BrainError as e:
+            if e.code in ("no_live", "http"):  # мозг перезапускался или старой версии
+                return self.client.transcribe(wav)
+            raise
 
 
 class _Worker:

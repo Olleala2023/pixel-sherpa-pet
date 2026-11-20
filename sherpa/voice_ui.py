@@ -16,7 +16,7 @@ from PIL import Image, ImageDraw, ImageTk
 
 from .markdown_view import MdStyle, parse, plain
 from .sprites import H, W, draw_chibi_frame
-from .voice import MAX_REC_S, BrainClient, Recorder, _Worker, err_text
+from .voice import MAX_REC_S, BrainClient, LiveUpload, Recorder, _Worker, err_text
 
 # Палитра из sprites.py: контур K, корпус w, фирменный голубой b/B, свечение o
 C = {
@@ -479,6 +479,7 @@ class VoiceWindow(CardWindow):
         super().__init__(pet.root, pet, self.WIDTH, 170, "Шерпа", "Готов слушать")
         self.client = client
         self.rec = Recorder()
+        self.live: LiveUpload | None = None
         self.worker = _Worker(self)
         self.session_id: str | None = None
         self.last_answer = ""
@@ -639,7 +640,14 @@ class VoiceWindow(CardWindow):
             return
         self._pose("look")
         self.mic.look(icon=I_STOP, bg=C["red"], hover=C["red_dk"])
+        # звук уходит мозгу по ходу записи: готовые фразы появляются в поле вопроса, не дожидаясь конца
+        self.live = LiveUpload(self.client, self.rec, lambda t: self.worker.post(self._on_live_text, t))
         self._tick_timer()
+
+    def _on_live_text(self, text: str) -> None:
+        if self.rec.active or self.busy:
+            self._set_question(text.strip())
+            self.q_text.see("end")
 
     def _tick_timer(self) -> None:
         if not self.rec.active:
@@ -661,8 +669,9 @@ class VoiceWindow(CardWindow):
         self.mic.look(icon=I_MIC, bg=C["blue"], hover=C["blue_dk"])
         self._pose("think")
         self.set_busy(True)
-        self.set_subtitle("Расшифровываю…")
-        self.worker.run(lambda: self.client.transcribe(wav), self._on_transcript, self._on_error)
+        self.set_subtitle("Дослушиваю…" if self._question() else "Расшифровываю…")
+        live = self.live
+        self.worker.run(lambda: live.finish(wav), self._on_transcript, self._on_error)
 
     def _on_transcript(self, r: dict) -> None:
         self.set_busy(False)
@@ -763,6 +772,8 @@ class VoiceWindow(CardWindow):
             self.toggle_record()
 
     def close(self) -> None:
+        if self.live is not None:
+            self.live.cancel()
         if self.rec.active:
             try:
                 self.rec.stop()

@@ -16,7 +16,7 @@ import tkinter as tk
 from PIL import Image, ImageDraw, ImageTk
 
 from .markdown_view import MdStyle, parse
-from .voice import MAX_REC_S, BrainClient, Recorder, _Worker, err_text
+from .voice import MAX_REC_S, BrainClient, LiveUpload, Recorder, _Worker, err_text
 from .voice_ui import C, I_CLOSE, I_COPY, I_MIC, ICONS, SS, UI, UI_SB, _rgb, _shrink
 
 MAX_W = 320        # ширина текста ответа, px
@@ -79,6 +79,8 @@ class Bubble(tk.Toplevel):
         self.flush_job = None
         self.notice_action = None
         self.action_btn = None
+        self.live = None  # LiveUpload текущей записи
+        self.live_text = ""
         self.hide_job = None
         self.hover = False
         self.mode = "idle"  # listen / busy / answer / error
@@ -298,11 +300,21 @@ class Bubble(tk.Toplevel):
             self._error(e)
             return
         self._pose("look")
+        self.live_text = ""
         self._show("listen", "● Слушаю · 0:00", "щёлкни по мне — готово")
         self.status.config(fg=C["red"])
-        # мозг будим сразу, пока человек говорит: холодный старт до 10 с
-        self.worker.run(self.client.ensure_running, lambda _: None, lambda _e: None)
+        # звук уходит мозгу по ходу записи: он просыпается, грузит модель и распознаёт фразы между паузами
+        self.live = LiveUpload(self.client, self.rec, lambda t: self.worker.post(self._on_live_text, t))
         self._tick()
+
+    def _on_live_text(self, text: str) -> None:
+        """Мозг распознал очередную фразу — показываем, что уже понято (хвост, если длинно)."""
+        self.live_text = text.strip()
+        if self.mode not in ("listen", "busy") or not self.live_text:
+            return
+        t = self.live_text if len(self.live_text) <= 160 else "…" + self.live_text[-158:]
+        self.hint.config(text=f"«{t}»")
+        self._layout()
 
     def _tick(self) -> None:
         if not self.rec.active:
@@ -318,10 +330,14 @@ class Bubble(tk.Toplevel):
         wav = self.rec.stop()
         self.busy = True
         self._pose("think")
-        self._show("busy", "Расшифровываю…")
-        self.worker.run(lambda: self.client.transcribe(wav), self._on_transcript, self._error)
+        t = self.live_text if len(self.live_text) <= 160 else "…" + self.live_text[-158:]
+        self._show("busy", "Дослушиваю…" if t else "Расшифровываю…", f"«{t}»" if t else "")
+        live = self.live
+        self.worker.run(lambda: live.finish(wav), self._on_transcript, self._error)
 
     def cancel(self) -> None:
+        if self.live is not None:
+            self.live.cancel()
         if self.rec.active:
             try:
                 self.rec.stop()
